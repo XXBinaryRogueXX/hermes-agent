@@ -4044,6 +4044,8 @@ def get_auth_status(provider_id: Optional[str] = None) -> Dict[str, Any]:
         return get_codex_auth_status()
     if target == "qwen-oauth":
         return get_qwen_auth_status()
+    if target == "minimax-oauth":
+        return get_minimax_oauth_auth_status()
     if target == "google-gemini-cli":
         return get_gemini_oauth_auth_status()
     if target == "copilot-acp":
@@ -4829,6 +4831,28 @@ def _minimax_save_auth_state(auth_state: Dict[str, Any]) -> None:
         _save_auth_store(auth_store)
 
 
+def _minimax_parse_expired_in(raw_value: Any) -> tuple[float, int]:
+    """Return (expires_at_epoch_seconds, expires_in_seconds).
+
+    MiniMax has returned `expired_in` as both a duration in seconds and a
+    Unix-milliseconds timestamp depending on endpoint/response shape. Treat
+    very large values as absolute timestamps; otherwise treat as a duration.
+    """
+    value = int(raw_value)
+    now = time.time()
+    now_ms = int(now * 1000)
+    if value > now_ms // 2:
+        expires_at = value / 1000.0
+        expires_in_s = max(0, int(expires_at - now))
+    elif value > int(now) // 2:
+        expires_at = float(value)
+        expires_in_s = max(0, int(expires_at - now))
+    else:
+        expires_in_s = max(0, value)
+        expires_at = now + expires_in_s
+    return expires_at, expires_in_s
+
+
 def _minimax_oauth_login(
     *, region: str = "global", open_browser: bool = True,
     timeout_seconds: float = 15.0,
@@ -4865,6 +4889,12 @@ def _minimax_oauth_login(
         print("To continue:")
         print(f"  1. Open: {verification_url}")
         print(f"  2. If prompted, enter code: {user_code}")
+        try:
+            code_expires_at, code_ttl = _minimax_parse_expired_in(code_data["expired_in"])
+            code_expires_iso = datetime.fromtimestamp(code_expires_at, tz=timezone.utc).isoformat()
+            print(f"  Code expires: {code_expires_iso} ({code_ttl}s)")
+        except Exception:
+            pass
         if open_browser:
             if webbrowser.open(verification_url):
                 print("  (Opened browser for verification)")
@@ -4884,8 +4914,7 @@ def _minimax_oauth_login(
         )
 
     now = datetime.now(timezone.utc)
-    expires_in_s = int(token_data["expired_in"])
-    expires_at = now.timestamp() + expires_in_s
+    expires_at, expires_in_s = _minimax_parse_expired_in(token_data["expired_in"])
 
     auth_state = {
         "provider": "minimax-oauth",
@@ -4960,14 +4989,13 @@ def _refresh_minimax_oauth_state(
             relogin_required=True,
         )
     now_dt = datetime.now(timezone.utc)
-    expires_in_s = int(payload["expired_in"])
+    expires_at, expires_in_s = _minimax_parse_expired_in(payload["expired_in"])
     new_state = dict(state)
     new_state.update({
         "access_token": payload["access_token"],
         "refresh_token": payload.get("refresh_token", state["refresh_token"]),
         "obtained_at": now_dt.isoformat(),
-        "expires_at": datetime.fromtimestamp(now_dt.timestamp() + expires_in_s,
-                                             tz=timezone.utc).isoformat(),
+        "expires_at": datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(),
         "expires_in": expires_in_s,
     })
     _minimax_save_auth_state(new_state)

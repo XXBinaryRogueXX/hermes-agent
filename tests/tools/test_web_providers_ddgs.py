@@ -5,7 +5,7 @@ Covers:
 - DDGSSearchProvider.search() — happy path, missing package, runtime error
 - Result normalization (title, url, description, position)
 - _is_backend_available("ddgs") / _get_backend() integration
-- web_extract / web_crawl return search-only errors when ddgs is active
+- web_extract uses native extraction when ddgs is only the search backend; crawl errors clearly
 """
 from __future__ import annotations
 
@@ -205,18 +205,44 @@ class TestDDGSBackendWiring:
 
 
 # ---------------------------------------------------------------------------
-# ddgs is search-only: web_extract / web_crawl return clear errors
+# ddgs is search-only; extraction uses native unless explicitly misconfigured
 # ---------------------------------------------------------------------------
 
 
 class TestDDGSSearchOnlyErrors:
-    def test_web_extract_returns_search_only_error(self, monkeypatch):
+    def test_web_extract_uses_native_with_ddgs_search_backend(self, monkeypatch):
         import asyncio
         from tools import web_tools
 
         monkeypatch.setattr(web_tools, "_load_web_config", lambda: {"backend": "ddgs"})
         monkeypatch.setattr(web_tools, "_ddgs_package_importable", lambda: True)
         monkeypatch.setattr(web_tools, "_is_tool_gateway_ready", lambda: False)
+        monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: False, raising=False)
+        monkeypatch.setattr(web_tools, "check_auxiliary_model", lambda: False)
+
+        async def fake_native_extract(urls, format=None):
+            return [{
+                "url": urls[0],
+                "title": "Example",
+                "content": "native content",
+                "raw_content": "native content",
+                "metadata": {"source": "native"},
+            }]
+
+        monkeypatch.setattr(web_tools, "_native_extract", fake_native_extract)
+
+        result_str = asyncio.get_event_loop().run_until_complete(
+            web_tools.web_extract_tool(["https://example.com"])
+        )
+        result = json.loads(result_str)
+        assert result["results"][0]["content"] == "native content"
+
+    def test_explicit_ddgs_extract_backend_returns_search_only_error(self, monkeypatch):
+        import asyncio
+        from tools import web_tools
+
+        monkeypatch.setattr(web_tools, "_load_web_config", lambda: {"extract_backend": "ddgs"})
+        monkeypatch.setattr(web_tools, "_ddgs_package_importable", lambda: True)
         monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: False, raising=False)
 
         result_str = asyncio.get_event_loop().run_until_complete(

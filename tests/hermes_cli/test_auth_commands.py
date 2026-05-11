@@ -1478,6 +1478,33 @@ def test_seed_custom_pool_respects_config_suppression(tmp_path, monkeypatch):
     assert "config:my" not in active
 
 
+def test_get_auth_status_dispatches_minimax_oauth(tmp_path, monkeypatch):
+    """Generic `hermes auth status minimax-oauth` must use MiniMax OAuth state."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    _write_auth_store(
+        tmp_path,
+        {
+            "version": 1,
+            "providers": {
+                "minimax-oauth": {
+                    "provider": "minimax-oauth",
+                    "access_token": "mm-access-token",
+                    "region": "global",
+                    "expires_at": "2999-01-01T00:00:00+00:00",
+                }
+            },
+        },
+    )
+
+    from hermes_cli.auth import get_auth_status
+
+    status = get_auth_status("minimax-oauth")
+
+    assert status["logged_in"] is True
+    assert status["provider"] == "minimax-oauth"
+    assert status["region"] == "global"
+
+
 def test_credential_sources_registry_has_expected_steps():
     """Sanity check — the registry contains the expected RemovalSteps.
 

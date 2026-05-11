@@ -258,6 +258,8 @@ class TestBackendSelection:
         "TOOL_GATEWAY_DOMAIN",
         "TOOL_GATEWAY_SCHEME",
         "TOOL_GATEWAY_USER_TOKEN",
+        "SEARXNG_URL",
+        "BRAVE_SEARCH_API_KEY",
         "TAVILY_API_KEY",
     )
 
@@ -485,7 +487,7 @@ class TestWebSearchSchema:
     def test_web_search_clamps_limit_before_backend_call(self):
         import tools.web_tools
 
-        with patch("tools.web_tools._get_backend", return_value="parallel"), \
+        with patch("tools.web_tools._get_search_backend", return_value="parallel"), \
              patch("tools.web_tools._parallel_search", return_value={"success": True, "data": {"web": []}}) as mock_search, \
              patch("tools.interrupt.is_interrupted", return_value=False), \
              patch.object(tools.web_tools._debug, "log_call"), \
@@ -536,6 +538,8 @@ class TestCheckWebApiKey:
         "TOOL_GATEWAY_DOMAIN",
         "TOOL_GATEWAY_SCHEME",
         "TOOL_GATEWAY_USER_TOKEN",
+        "SEARXNG_URL",
+        "BRAVE_SEARCH_API_KEY",
         "TAVILY_API_KEY",
     )
 
@@ -580,9 +584,9 @@ class TestCheckWebApiKey:
             from tools.web_tools import check_web_api_key
             assert check_web_api_key() is True
 
-    def test_no_keys_returns_false(self):
+    def test_native_extract_fallback_makes_web_available_without_keys(self):
         from tools.web_tools import check_web_api_key
-        assert check_web_api_key() is False
+        assert check_web_api_key() is True
 
     def test_both_keys_returns_true(self):
         with patch.dict(os.environ, {
@@ -606,12 +610,12 @@ class TestCheckWebApiKey:
             from tools.web_tools import check_web_api_key
             assert check_web_api_key() is True
 
-    def test_configured_backend_must_match_available_provider(self):
+    def test_unavailable_configured_backend_falls_back_to_available_provider(self):
         with patch("tools.web_tools._load_web_config", return_value={"backend": "parallel"}):
             with patch("tools.web_tools._read_nous_access_token", return_value="nous-token"):
                 with patch.dict(os.environ, {"FIRECRAWL_GATEWAY_URL": "http://127.0.0.1:3002"}, clear=False):
                     from tools.web_tools import check_web_api_key
-                    assert check_web_api_key() is False
+                    assert check_web_api_key() is True
 
     def test_configured_firecrawl_backend_accepts_managed_gateway(self):
         with patch("tools.web_tools._load_web_config", return_value={"backend": "firecrawl"}):

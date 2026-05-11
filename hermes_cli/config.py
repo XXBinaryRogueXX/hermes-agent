@@ -1976,7 +1976,7 @@ OPTIONAL_ENV_VARS = {
         "category": "tool",
     },
     "BRAVE_SEARCH_API_KEY": {
-        "description": "Brave Search API subscription token (free tier: 2,000 queries/mo)",
+        "description": "Brave Search API subscription token",
         "prompt": "Brave Search subscription token",
         "url": "https://brave.com/search/api/",
         "tools": ["web_search"],

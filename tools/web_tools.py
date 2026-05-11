@@ -13,8 +13,10 @@ Available tools:
 - web_crawl_tool: Crawl websites with specific instructions
 
 Backend compatibility:
+- Brave Search API: https://brave.com/search/api/ (search only)
 - Exa: https://exa.ai (search, extract)
 - Firecrawl: https://docs.firecrawl.dev/introduction (search, extract, crawl; direct or derived firecrawl-gateway.<domain> for Nous Subscribers)
+- Native: direct HTTP fetch + lightweight text extraction (extract only)
 - Parallel: https://docs.parallel.ai (search, extract)
 - Tavily: https://tavily.com (search, extract, crawl)
 
@@ -111,6 +113,44 @@ def _has_env(name: str) -> bool:
     val = os.getenv(name)
     return bool(val and val.strip())
 
+
+_SEARCH_CAPABLE_BACKENDS = ("parallel", "firecrawl", "tavily", "exa", "searxng", "brave", "ddgs")
+_EXTRACT_CAPABLE_BACKENDS = ("parallel", "firecrawl", "tavily", "exa", "native")
+_CRAWL_CAPABLE_BACKENDS = ("firecrawl", "tavily")
+_SEARCH_ONLY_BACKENDS = {"searxng", "brave", "brave-free", "ddgs"}
+
+
+def _normalize_backend_name(backend: str) -> str:
+    """Normalize legacy backend names to their canonical spelling."""
+    normalized = (backend or "").lower().strip()
+    if normalized == "brave-free":
+        return "brave"
+    return normalized
+
+
+def _backend_label(backend: str) -> str:
+    """Human-readable backend label for error/status messages."""
+    labels = {
+        "searxng": "SearXNG",
+        "brave": "Brave Search API",
+        "brave-free": "Brave Search API",
+        "ddgs": "DuckDuckGo (ddgs)",
+        "native": "Native web extraction",
+    }
+    return labels.get(backend, backend or "unknown backend")
+
+
+def _backend_supports(capability: str, backend: str) -> bool:
+    """Return whether ``backend`` supports ``capability``."""
+    canonical = _normalize_backend_name(backend)
+    if capability == "search":
+        return canonical in _SEARCH_CAPABLE_BACKENDS
+    if capability == "extract":
+        return canonical in _EXTRACT_CAPABLE_BACKENDS
+    if capability == "crawl":
+        return canonical in _CRAWL_CAPABLE_BACKENDS
+    return False
+
 def _load_web_config() -> dict:
     """Load the ``web:`` section from ~/.hermes/config.yaml."""
     try:
@@ -120,35 +160,55 @@ def _load_web_config() -> dict:
         return {}
 
 def _get_backend() -> str:
-    """Determine which web backend to use (shared fallback).
+    """Determine the legacy/shared web backend to use.
 
     Reads ``web.backend`` from config.yaml (set by ``hermes tools``).
-    Falls back to whichever API key is present for users who configured
-    keys manually without running setup.
+    Falls back to whichever search-capable backend is present for users who
+    configured keys manually without running setup.  Capability-specific callers
+    should prefer ``_get_search_backend()`` or ``_get_extract_backend()``.
     """
-    configured = (_load_web_config().get("backend") or "").lower().strip()
-    if configured in {"parallel", "firecrawl", "tavily", "exa", "searxng", "brave-free", "ddgs"}:
+    configured = _normalize_backend_name(_load_web_config().get("backend") or "")
+    if configured and _backend_supports("search", configured):
         return configured
 
-    # Fallback for manual / legacy config — pick the highest-priority
-    # available backend. Firecrawl also counts as available when the managed
-    # tool gateway is configured for Nous subscribers.
-    # Free-tier backends (searxng / brave-free / ddgs) trail the paid ones so
-    # existing paid setups are unaffected.
+    return _detect_search_backend()
+
+
+def _detect_search_backend() -> str:
+    """Auto-detect an available search-capable backend."""
+    # Firecrawl also counts as available when the managed tool gateway is
+    # configured for Nous subscribers. Search-only/non-OAuth backends trail the
+    # paid/managed providers so existing paid setups are unaffected.
     backend_candidates = (
         ("firecrawl", _has_env("FIRECRAWL_API_KEY") or _has_env("FIRECRAWL_API_URL") or _is_tool_gateway_ready()),
         ("parallel", _has_env("PARALLEL_API_KEY")),
         ("tavily", _has_env("TAVILY_API_KEY")),
         ("exa", _has_env("EXA_API_KEY")),
         ("searxng", _has_env("SEARXNG_URL")),
-        ("brave-free", _has_env("BRAVE_SEARCH_API_KEY")),
+        ("brave", _has_env("BRAVE_SEARCH_API_KEY")),
         ("ddgs", _ddgs_package_importable()),
     )
     for backend, available in backend_candidates:
         if available:
             return backend
 
-    return "firecrawl"  # default (backward compat)
+    return "firecrawl"  # default (backward compat / helpful setup error)
+
+
+def _detect_extract_backend() -> str:
+    """Auto-detect an available extract-capable backend."""
+    backend_candidates = (
+        ("firecrawl", _has_env("FIRECRAWL_API_KEY") or _has_env("FIRECRAWL_API_URL") or _is_tool_gateway_ready()),
+        ("parallel", _has_env("PARALLEL_API_KEY")),
+        ("tavily", _has_env("TAVILY_API_KEY")),
+        ("exa", _has_env("EXA_API_KEY")),
+        ("native", True),
+    )
+    for backend, available in backend_candidates:
+        if available:
+            return backend
+
+    return "native"
 
 
 def _get_search_backend() -> str:
@@ -156,11 +216,11 @@ def _get_search_backend() -> str:
 
     Selection priority:
     1. ``web.search_backend`` (per-capability override)
-    2. ``web.backend`` (shared fallback — existing behavior)
+    2. ``web.backend`` (shared fallback if it supports search)
     3. Auto-detect from env vars
 
     This enables using different providers for search vs extract
-    (e.g. SearXNG for search + Firecrawl for extract).
+    (e.g. Brave Search API for search + native/firecrawl for extract).
     """
     return _get_capability_backend("search")
 
@@ -170,27 +230,37 @@ def _get_extract_backend() -> str:
 
     Selection priority:
     1. ``web.extract_backend`` (per-capability override)
-    2. ``web.backend`` (shared fallback — existing behavior)
-    3. Auto-detect from env vars
+    2. ``web.backend`` (shared fallback if it supports extract)
+    3. Auto-detect extract-capable backends, ending with native extraction
     """
     return _get_capability_backend("extract")
 
 
 def _get_capability_backend(capability: str) -> str:
-    """Shared helper for per-capability backend selection.
-
-    Reads ``web.{capability}_backend`` from config; if set and available,
-    uses it. Otherwise falls through to the shared ``_get_backend()``.
-    """
+    """Shared helper for per-capability backend selection."""
     cfg = _load_web_config()
-    specific = (cfg.get(f"{capability}_backend") or "").lower().strip()
-    if specific and _is_backend_available(specific):
-        return specific
-    return _get_backend()
+    specific = _normalize_backend_name(cfg.get(f"{capability}_backend") or "")
+    if specific:
+        # Preserve explicitly configured but capability-incompatible backends so
+        # callers can return a clear, targeted error instead of silently routing
+        # work through a different service.
+        if not _backend_supports(capability, specific):
+            return specific
+        if _is_backend_available(specific):
+            return specific
+
+    shared = _normalize_backend_name(cfg.get("backend") or "")
+    if shared and _backend_supports(capability, shared) and _is_backend_available(shared):
+        return shared
+
+    if capability == "extract":
+        return _detect_extract_backend()
+    return _detect_search_backend()
 
 
 def _is_backend_available(backend: str) -> bool:
     """Return True when the selected backend is currently usable."""
+    backend = _normalize_backend_name(backend)
     if backend == "exa":
         return _has_env("EXA_API_KEY")
     if backend == "parallel":
@@ -201,10 +271,12 @@ def _is_backend_available(backend: str) -> bool:
         return _has_env("TAVILY_API_KEY")
     if backend == "searxng":
         return _has_env("SEARXNG_URL")
-    if backend == "brave-free":
+    if backend == "brave":
         return _has_env("BRAVE_SEARCH_API_KEY")
     if backend == "ddgs":
         return _ddgs_package_importable()
+    if backend == "native":
+        return True
     return False
 
 
@@ -302,6 +374,8 @@ def _web_requires_env() -> list[str]:
         "TAVILY_API_KEY",
         "FIRECRAWL_API_KEY",
         "FIRECRAWL_API_URL",
+        "SEARXNG_URL",
+        "BRAVE_SEARCH_API_KEY",
         "FIRECRAWL_GATEWAY_URL",
         "TOOL_GATEWAY_DOMAIN",
         "TOOL_GATEWAY_SCHEME",
@@ -1142,6 +1216,181 @@ async def _parallel_extract(urls: List[str]) -> List[Dict[str, Any]]:
     return results
 
 
+_NATIVE_EXTRACT_MAX_BYTES = 2_000_000
+
+
+def _html_title(markup: str) -> str:
+    """Extract an HTML title without pulling in heavier dependencies."""
+    import html as html_lib
+
+    match = re.search(r"(?is)<title[^>]*>(.*?)</title>", markup or "")
+    if not match:
+        return ""
+    title = re.sub(r"\s+", " ", match.group(1)).strip()
+    return html_lib.unescape(title)
+
+
+def _html_to_readable_text(markup: str) -> tuple[str, str]:
+    """Convert HTML to lightweight readable text for native extraction."""
+    import html as html_lib
+
+    title = _html_title(markup)
+    text = re.sub(r"(?is)<(script|style|noscript|svg|template)[^>]*>.*?</\1>", " ", markup or "")
+    text = re.sub(r"(?is)<br\s*/?>", "\n", text)
+    text = re.sub(
+        r"(?is)</(p|div|section|article|header|footer|main|aside|li|h[1-6]|tr|table|ul|ol|blockquote|pre)>",
+        "\n",
+        text,
+    )
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    text = html_lib.unescape(text)
+    lines = []
+    for line in text.splitlines():
+        cleaned = re.sub(r"[ \t]+", " ", line).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return "\n".join(lines), title
+
+
+async def _native_extract(urls: List[str], format: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Extract URL content with direct HTTP fetch + lightweight parsing.
+
+    This deliberately avoids Brave Search (search-only) for extraction and gives
+    users a no-extra-token fallback when no paid extraction provider is present.
+    PDF conversion is left to Firecrawl/Tavily/Exa/Parallel.
+    """
+    from tools.interrupt import is_interrupted
+
+    requested_format = (format or "markdown").lower().strip()
+    results: List[Dict[str, Any]] = []
+    headers = {
+        "User-Agent": "Hermes-Agent/1.0 (+https://github.com/NousResearch/hermes-agent)",
+        "Accept": "text/html,application/xhtml+xml,text/plain,application/json,application/xml,text/*,*/*;q=0.8",
+    }
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30, headers=headers) as client:
+        for url in urls:
+            if is_interrupted():
+                results.append({"url": url, "title": "", "content": "", "raw_content": "", "error": "Interrupted"})
+                continue
+
+            blocked = check_website_access(url)
+            if blocked:
+                logger.info("Blocked native web_extract for %s by rule %s", blocked["host"], blocked["rule"])
+                results.append({
+                    "url": url,
+                    "title": "",
+                    "content": "",
+                    "raw_content": "",
+                    "error": blocked["message"],
+                    "blocked_by_policy": {"host": blocked["host"], "rule": blocked["rule"], "source": blocked["source"]},
+                })
+                continue
+
+            try:
+                logger.info("Native extract: %s", url)
+                response = await client.get(url)
+                final_url = str(response.url)
+
+                if final_url != url:
+                    if not is_safe_url(final_url):
+                        results.append({
+                            "url": final_url,
+                            "title": "",
+                            "content": "",
+                            "raw_content": "",
+                            "error": "Blocked: redirect targets a private or internal network address",
+                        })
+                        continue
+                    final_blocked = check_website_access(final_url)
+                    if final_blocked:
+                        logger.info("Blocked redirected native web_extract for %s by rule %s", final_blocked["host"], final_blocked["rule"])
+                        results.append({
+                            "url": final_url,
+                            "title": "",
+                            "content": "",
+                            "raw_content": "",
+                            "error": final_blocked["message"],
+                            "blocked_by_policy": {"host": final_blocked["host"], "rule": final_blocked["rule"], "source": final_blocked["source"]},
+                        })
+                        continue
+
+                response.raise_for_status()
+
+                content_type = response.headers.get("content-type", "").lower()
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        if int(content_length) > _NATIVE_EXTRACT_MAX_BYTES:
+                            results.append({
+                                "url": final_url,
+                                "title": "",
+                                "content": "",
+                                "raw_content": "",
+                                "error": "Page exceeds native extraction limit of 2MB",
+                            })
+                            continue
+                    except ValueError:
+                        pass
+
+                raw_bytes = response.content
+                if len(raw_bytes) > _NATIVE_EXTRACT_MAX_BYTES:
+                    results.append({
+                        "url": final_url,
+                        "title": "",
+                        "content": "",
+                        "raw_content": "",
+                        "error": "Page exceeds native extraction limit of 2MB",
+                    })
+                    continue
+
+                if "application/pdf" in content_type or final_url.lower().split("?", 1)[0].endswith(".pdf"):
+                    results.append({
+                        "url": final_url,
+                        "title": "",
+                        "content": "",
+                        "raw_content": "",
+                        "error": "Native extraction cannot convert PDFs; configure Firecrawl, Tavily, Exa, or Parallel for PDF extraction.",
+                    })
+                    continue
+
+                try:
+                    body = response.text
+                except UnicodeDecodeError:
+                    body = raw_bytes.decode("utf-8", errors="replace")
+
+                title = ""
+                if "html" in content_type or "<html" in body[:500].lower():
+                    readable, title = _html_to_readable_text(body)
+                    chosen_content = body if requested_format == "html" else readable
+                else:
+                    chosen_content = body.strip()
+
+                results.append({
+                    "url": final_url,
+                    "title": title,
+                    "content": chosen_content,
+                    "raw_content": chosen_content,
+                    "metadata": {
+                        "sourceURL": final_url,
+                        "title": title,
+                        "contentType": content_type,
+                        "source": "native",
+                    },
+                })
+            except Exception as extract_err:
+                logger.debug("Native extract failed for %s: %s", url, extract_err)
+                results.append({
+                    "url": url,
+                    "title": "",
+                    "content": "",
+                    "raw_content": "",
+                    "error": str(extract_err),
+                })
+
+    return results
+
+
 def web_search_tool(query: str, limit: int = 5) -> str:
     """
     Search the web for information using available search API backend.
@@ -1228,15 +1477,21 @@ def web_search_tool(query: str, limit: int = 5) -> str:
             _debug.save()
             return result_json
 
-        if backend == "brave-free":
-            from tools.web_providers.brave_free import BraveFreeSearchProvider
-            response_data = BraveFreeSearchProvider().search(query, limit)
+        if backend == "brave":
+            from tools.web_providers.brave_free import BraveSearchProvider
+            response_data = BraveSearchProvider().search(query, limit)
             debug_call_data["results_count"] = len(response_data.get("data", {}).get("web", []))
             result_json = json.dumps(response_data, indent=2, ensure_ascii=False)
             debug_call_data["final_response_size"] = len(result_json)
             _debug.log_call("web_search_tool", debug_call_data)
             _debug.save()
             return result_json
+
+        if backend == "native":
+            return tool_error(
+                "Native web extraction is extract-only; set web.search_backend to a search provider such as brave, parallel, tavily, exa, searxng, or ddgs.",
+                success=False,
+            )
 
         if backend == "ddgs":
             from tools.web_providers.ddgs import DDGSSearchProvider
@@ -1391,6 +1646,8 @@ async def web_extract_tool(
                 results = await _parallel_extract(safe_urls)
             elif backend == "exa":
                 results = _exa_extract(safe_urls)
+            elif backend == "native":
+                results = await _native_extract(safe_urls, format=format)
             elif backend == "tavily":
                 logger.info("Tavily extract: %d URL(s)", len(safe_urls))
                 raw = _tavily_request("extract", {
@@ -1398,13 +1655,13 @@ async def web_extract_tool(
                     "include_images": False,
                 })
                 results = _normalize_tavily_documents(raw, fallback_url=safe_urls[0] if safe_urls else "")
-            elif backend in {"searxng", "brave-free", "ddgs"}:
-                # These backends are search-only — they cannot extract URL content
-                _label = {"searxng": "SearXNG", "brave-free": "Brave Search (free tier)", "ddgs": "DuckDuckGo (ddgs)"}[backend]
+            elif backend in _SEARCH_ONLY_BACKENDS:
+                # These backends are search-only — they cannot extract URL content.
+                _label = _backend_label(backend)
                 return json.dumps({
                     "success": False,
                     "error": f"{_label} is a search-only backend and cannot extract URL content. "
-                             "Set web.extract_backend to firecrawl, tavily, exa, or parallel.",
+                             "Set web.extract_backend to native, firecrawl, tavily, exa, or parallel.",
                 }, ensure_ascii=False)
             else:
                 # ── Firecrawl extraction ──
@@ -1781,12 +2038,18 @@ async def web_crawl_tool(
             _debug.save()
             return cleaned_result
 
-        # SearXNG / Brave Search (free tier) / DuckDuckGo (ddgs) are search-only — they cannot crawl
-        if backend in {"searxng", "brave-free", "ddgs"}:
-            _label = {"searxng": "SearXNG", "brave-free": "Brave Search (free tier)", "ddgs": "DuckDuckGo (ddgs)"}[backend]
+        # Search-only backends cannot crawl URLs.
+        if backend in _SEARCH_ONLY_BACKENDS:
+            _label = _backend_label(backend)
             return json.dumps({
                 "error": f"{_label} is a search-only backend and cannot crawl URLs. "
-                         "Set FIRECRAWL_API_KEY for crawling, or use web_search instead.",
+                         "Set web.backend to firecrawl or tavily for crawling, or use web_search instead.",
+                "success": False,
+            }, ensure_ascii=False)
+
+        if backend == "native":
+            return json.dumps({
+                "error": "Native web extraction is extract-only and cannot crawl URLs. Set web.backend to firecrawl or tavily for crawling, or use web_extract for a single URL.",
                 "success": False,
             }, ensure_ascii=False)
 
@@ -2083,13 +2346,20 @@ def check_firecrawl_api_key() -> bool:
 
 
 def check_web_api_key() -> bool:
-    """Check whether the configured web backend is available."""
-    configured = _load_web_config().get("backend", "").lower().strip()
-    if configured in {"exa", "parallel", "firecrawl", "tavily", "searxng", "brave-free", "ddgs"}:
-        return _is_backend_available(configured)
+    """Check whether at least one configured/available web backend can run."""
+    cfg = _load_web_config()
+    configured_backends = [
+        _normalize_backend_name(cfg.get("search_backend") or ""),
+        _normalize_backend_name(cfg.get("extract_backend") or ""),
+        _normalize_backend_name(cfg.get("backend") or ""),
+    ]
+    for configured in configured_backends:
+        if configured and _is_backend_available(configured):
+            return True
+
     return any(
         _is_backend_available(backend)
-        for backend in ("exa", "parallel", "firecrawl", "tavily", "searxng", "brave-free", "ddgs")
+        for backend in ("exa", "parallel", "firecrawl", "tavily", "searxng", "brave", "ddgs", "native")
     )
 
 
@@ -2127,8 +2397,8 @@ if __name__ == "__main__":
             print("   Using Tavily API (https://tavily.com)")
         elif backend == "searxng":
             print(f"   Using SearXNG (search only): {os.getenv('SEARXNG_URL', '').strip()}")
-        elif backend == "brave-free":
-            print("   Using Brave Search free tier (search only)")
+        elif backend == "brave":
+            print("   Using Brave Search API (search only)")
         elif backend == "ddgs":
             print("   Using DuckDuckGo via ddgs package (search only)")
         elif firecrawl_url_available:

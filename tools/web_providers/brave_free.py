@@ -1,9 +1,9 @@
-"""Brave Search web search provider (free tier).
+"""Brave Search API web search provider.
 
-Brave Search's Data-for-Search API offers a free tier (2,000 queries/mo at the
-time of writing) after signing up at https://brave.com/search/api/.  This
-provider implements ``WebSearchProvider`` only — the Data-for-Search endpoint
-returns search results, it does not extract/crawl arbitrary URLs.
+Brave Search's Data-for-Search API exposes web search results after signing up
+at https://brave.com/search/api/.  This provider implements
+``WebSearchProvider`` only — the Data-for-Search endpoint returns search
+results, it does not extract/crawl arbitrary URLs.
 
 Configuration::
 
@@ -12,12 +12,11 @@ Configuration::
 
     # ~/.hermes/config.yaml
     web:
-      search_backend: "brave-free"
+      search_backend: "brave"
       extract_backend: "firecrawl"    # pair with an extract provider if needed
 
-The API uses the ``X-Subscription-Token`` header.  Free-tier keys are rate
-limited (1 qps) and capped at 2k queries/month; see the Brave dashboard for
-current quotas.
+The API uses the ``X-Subscription-Token`` header.  See the Brave dashboard for
+the current quota attached to the subscription token.
 """
 
 from __future__ import annotations
@@ -33,8 +32,8 @@ logger = logging.getLogger(__name__)
 _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 
 
-class BraveFreeSearchProvider(WebSearchProvider):
-    """Search via the Brave Search API (free tier).
+class BraveSearchProvider(WebSearchProvider):
+    """Search via the Brave Search API.
 
     Requires ``BRAVE_SEARCH_API_KEY`` to be set. The value is passed as the
     ``X-Subscription-Token`` header. No extract capability — pair with
@@ -42,7 +41,7 @@ class BraveFreeSearchProvider(WebSearchProvider):
     """
 
     def provider_name(self) -> str:
-        return "brave-free"
+        return "brave"
 
     def is_configured(self) -> bool:
         """Return True when ``BRAVE_SEARCH_API_KEY`` is set to a non-empty value."""
@@ -128,3 +127,9 @@ class BraveFreeSearchProvider(WebSearchProvider):
         )
 
         return {"success": True, "data": {"web": web_results}}
+
+
+# Backward-compatible alias for old imports/configs that used the original
+# free-tier-specific name.  The API surface is the same for paid subscriptions;
+# the canonical backend name is now ``brave``.
+BraveFreeSearchProvider = BraveSearchProvider

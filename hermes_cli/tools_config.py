@@ -312,10 +312,10 @@ TOOL_CATEGORIES = {
                 ],
             },
             {
-                "name": "Brave Search (Free Tier)",
-                "badge": "free tier · search only",
-                "tag": "2,000 queries/mo free — search only (pair with any extract provider)",
-                "web_backend": "brave-free",
+                "name": "Brave Search API",
+                "badge": "subscription token · search only",
+                "tag": "Brave Search Data-for-Search API — search only (pair with any extract provider)",
+                "web_backend": "brave",
                 "env_vars": [
                     {"key": "BRAVE_SEARCH_API_KEY", "prompt": "Brave Search subscription token", "url": "https://brave.com/search/api/"},
                 ],

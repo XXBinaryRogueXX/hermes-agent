@@ -254,11 +254,15 @@ def get_nous_subscription_features(
     browser_cfg = config.get("browser") if isinstance(config.get("browser"), dict) else {}
     terminal_cfg = config.get("terminal") if isinstance(config.get("terminal"), dict) else {}
 
-    web_backend = str(web_cfg.get("backend") or "").strip().lower()
+    def _normalize_web_backend(name: object) -> str:
+        value = str(name or "").strip().lower()
+        return "brave" if value == "brave-free" else value
+
+    web_backend = _normalize_web_backend(web_cfg.get("backend"))
     # Per-capability overrides: if set, they determine which backend is active for
     # search/extract independently of web.backend.
-    web_search_backend = str(web_cfg.get("search_backend") or "").strip().lower()
-    web_extract_backend = str(web_cfg.get("extract_backend") or "").strip().lower()
+    web_search_backend = _normalize_web_backend(web_cfg.get("search_backend"))
+    web_extract_backend = _normalize_web_backend(web_cfg.get("extract_backend"))
     tts_provider = str(tts_cfg.get("provider") or "edge").strip().lower()
     browser_provider_explicit = "cloud_provider" in browser_cfg
     browser_provider = normalize_browser_cloud_provider(
@@ -285,6 +289,7 @@ def get_nous_subscription_features(
     direct_parallel = bool(get_env_value("PARALLEL_API_KEY"))
     direct_tavily = bool(get_env_value("TAVILY_API_KEY"))
     direct_searxng = bool(get_env_value("SEARXNG_URL"))
+    direct_brave = bool(get_env_value("BRAVE_SEARCH_API_KEY"))
     direct_fal = fal_key_is_configured()
     direct_openai_tts = bool(resolve_openai_audio_api_key())
     direct_elevenlabs = bool(get_env_value("ELEVENLABS_API_KEY"))
@@ -299,6 +304,8 @@ def get_nous_subscription_features(
         direct_exa = False
         direct_parallel = False
         direct_tavily = False
+        direct_searxng = False
+        direct_brave = False
     if image_use_gateway:
         direct_fal = False
     if tts_use_gateway:
@@ -329,17 +336,30 @@ def get_nous_subscription_features(
             or (web_backend == "parallel" and direct_parallel)
             or (web_backend == "tavily" and direct_tavily)
             or (web_backend == "searxng" and direct_searxng)
+            or (web_backend == "brave" and direct_brave)
+            or (web_backend == "native")
+            or (web_extract_backend == "native")
             # Per-capability overrides: search_backend or extract_backend may be set
             # without web.backend (using the new split config from #20061)
             or (web_search_backend == "searxng" and direct_searxng)
+            or (web_search_backend == "brave" and direct_brave)
             or (web_search_backend == "exa" and direct_exa)
             or (web_search_backend == "firecrawl" and direct_firecrawl)
             or (web_search_backend == "parallel" and direct_parallel)
             or (web_search_backend == "tavily" and direct_tavily)
+            or (web_extract_backend == "native")
         )
     )
     web_available = bool(
-        managed_web_available or direct_exa or direct_firecrawl or direct_parallel or direct_tavily or direct_searxng
+        managed_web_available
+        or direct_exa
+        or direct_firecrawl
+        or direct_parallel
+        or direct_tavily
+        or direct_searxng
+        or direct_brave
+        or web_backend == "native"
+        or web_extract_backend == "native"
     )
 
     image_managed = image_tool_enabled and managed_image_available and not direct_fal

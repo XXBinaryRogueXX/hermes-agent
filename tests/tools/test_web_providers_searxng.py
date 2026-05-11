@@ -7,7 +7,7 @@ Covers:
 - Score-based sorting and limit truncation
 - _is_backend_available("searxng") integration
 - _get_backend() recognizes "searxng" as a valid configured backend
-- check_web_api_key() includes searxng in availability check
+- check_web_api_key() includes searxng/native extraction in availability check
 """
 from __future__ import annotations
 
@@ -268,7 +268,7 @@ class TestGetBackendSearXNG:
 
 
 # ---------------------------------------------------------------------------
-# Integration: check_web_api_key includes searxng
+# Integration: check_web_api_key includes searxng and native extraction
 # ---------------------------------------------------------------------------
 
 
@@ -279,7 +279,7 @@ class TestCheckWebApiKey:
         monkeypatch.setenv("SEARXNG_URL", "http://localhost:8080")
         assert web_tools.check_web_api_key() is True
 
-    def test_no_credentials_fails(self, monkeypatch):
+    def test_native_extract_fallback_makes_web_available_without_credentials(self, monkeypatch):
         from tools import web_tools
         monkeypatch.setattr(web_tools, "_load_web_config", lambda: {})
         monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
@@ -290,16 +290,16 @@ class TestCheckWebApiKey:
         monkeypatch.delenv("SEARXNG_URL", raising=False)
         monkeypatch.setattr(web_tools, "_is_tool_gateway_ready", lambda: False)
         monkeypatch.setattr(web_tools, "check_firecrawl_api_key", lambda: False)
-        assert web_tools.check_web_api_key() is False
+        assert web_tools.check_web_api_key() is True
 
 
 # ---------------------------------------------------------------------------
-# searxng-only: web_extract and web_crawl return clear errors
+# searxng-only: extraction falls back to native; crawl is still unsupported
 # ---------------------------------------------------------------------------
 
 
 class TestSearXNGOnlyExtractCrawlErrors:
-    """When searxng is the active backend, extract/crawl must return clear errors."""
+    """When searxng is active, extraction uses native unless explicitly misconfigured."""
 
     def test_web_crawl_searxng_returns_clear_error(self, monkeypatch):
         import asyncio
@@ -319,13 +319,40 @@ class TestSearXNGOnlyExtractCrawlErrors:
         assert result["success"] is False
         assert "search-only" in result["error"].lower() or "SearXNG" in result["error"]
 
-    def test_web_extract_searxng_returns_clear_error(self, monkeypatch):
+    def test_web_extract_uses_native_with_searxng_search_backend(self, monkeypatch):
         import asyncio
         from tools import web_tools
 
         monkeypatch.setattr(web_tools, "_load_web_config", lambda: {"backend": "searxng"})
         monkeypatch.setenv("SEARXNG_URL", "http://localhost:8080")
         monkeypatch.setattr(web_tools, "_is_tool_gateway_ready", lambda: False)
+        monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: False, raising=False)
+        monkeypatch.setattr(web_tools, "check_auxiliary_model", lambda: False)
+
+        async def fake_native_extract(urls, format=None):
+            return [{
+                "url": urls[0],
+                "title": "Example",
+                "content": "native content",
+                "raw_content": "native content",
+                "metadata": {"source": "native"},
+            }]
+
+        monkeypatch.setattr(web_tools, "_native_extract", fake_native_extract)
+
+        import json
+        result_str = asyncio.get_event_loop().run_until_complete(
+            web_tools.web_extract_tool(["https://example.com"])
+        )
+        result = json.loads(result_str)
+        assert result["results"][0]["content"] == "native content"
+
+    def test_explicit_searxng_extract_backend_returns_search_only_error(self, monkeypatch):
+        import asyncio
+        from tools import web_tools
+
+        monkeypatch.setattr(web_tools, "_load_web_config", lambda: {"extract_backend": "searxng"})
+        monkeypatch.setenv("SEARXNG_URL", "http://localhost:8080")
         monkeypatch.setattr("tools.interrupt.is_interrupted", lambda: False, raising=False)
 
         import json
