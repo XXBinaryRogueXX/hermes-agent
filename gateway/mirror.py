@@ -11,6 +11,7 @@ the full SessionStore machinery.
 
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -154,7 +155,12 @@ def _append_to_jsonl(session_id: str, message: dict) -> None:
     """Append a message to the JSONL transcript file."""
     transcript_path = _SESSIONS_DIR / f"{session_id}.jsonl"
     try:
-        with open(transcript_path, "a", encoding="utf-8") as f:
+        fd = os.open(transcript_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        try:
+            os.chmod(transcript_path, 0o600)
+        except OSError:
+            pass
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(message, ensure_ascii=False) + "\n")
     except Exception as e:
         logger.debug("Mirror JSONL write failed: %s", e)

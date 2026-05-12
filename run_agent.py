@@ -5080,9 +5080,11 @@ class AIAgent:
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             dump_file = self.logs_dir / f"request_dump_{self.session_id}_{timestamp}.json"
-            dump_file.write_text(
-                json.dumps(dump_payload, ensure_ascii=False, indent=2, default=str),
-                encoding="utf-8",
+            atomic_json_write(
+                dump_file,
+                dump_payload,
+                indent=2,
+                default=str,
             )
 
             self._vprint(f"{self.log_prefix}🧾 Request debug dump written to: {dump_file}")

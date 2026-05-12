@@ -1,6 +1,7 @@
 """Tests for gateway session management."""
 
 import json
+import stat
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -472,6 +473,16 @@ class TestSessionStoreRewriteTranscript:
 
         reloaded = store.load_transcript(session_id)
         assert reloaded == []
+
+    def test_jsonl_transcripts_are_owner_only(self, store):
+        session_id = "private_session"
+        store.append_to_transcript(session_id, {"role": "user", "content": "secret-shaped text"})
+
+        transcript_path = store.get_transcript_path(session_id)
+        assert stat.S_IMODE(transcript_path.stat().st_mode) == 0o600
+
+        store.rewrite_transcript(session_id, [{"role": "assistant", "content": "updated"}])
+        assert stat.S_IMODE(transcript_path.stat().st_mode) == 0o600
 
 
 class TestLoadTranscriptCorruptLines:

@@ -10,9 +10,11 @@ from tools.session_search_tool import (
     _format_conversation,
     _truncate_around_matches,
     _get_session_search_max_concurrency,
+    _get_session_search_max_summary_tokens,
     _list_recent_sessions,
     _HIDDEN_SESSION_SOURCES,
     MAX_SESSION_CHARS,
+    MAX_SUMMARY_TOKENS,
     SESSION_SEARCH_SCHEMA,
 )
 
@@ -239,6 +241,26 @@ class TestSessionSearchConcurrency:
         assert result["success"] is True
         assert result["count"] == 3
         assert max_seen["value"] == 1
+
+
+class TestSessionSearchSummaryBudget:
+    def test_default_summary_budget_fits_small_context_aux_models(self):
+        assert MAX_SUMMARY_TOKENS <= 3000
+        assert MAX_SESSION_CHARS <= 80_000
+
+    def test_reads_and_clamps_configured_summary_budget(self, monkeypatch):
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config",
+            lambda: {"auxiliary": {"session_search": {"max_summary_tokens": 9000}}},
+        )
+        assert _get_session_search_max_summary_tokens() == 4000
+
+    def test_invalid_summary_budget_uses_default(self, monkeypatch):
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config",
+            lambda: {"auxiliary": {"session_search": {"max_summary_tokens": "huge"}}},
+        )
+        assert _get_session_search_max_summary_tokens() == MAX_SUMMARY_TOKENS
 
 
 class TestRecentSessionListing:

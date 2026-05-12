@@ -22,6 +22,23 @@ from typing import Dict, List, Optional, Any
 logger = logging.getLogger(__name__)
 
 
+def _open_private_text(path: Path, mode: str):
+    """Open a transcript file and force owner-only permissions."""
+    flags = os.O_CREAT
+    if "a" in mode:
+        flags |= os.O_APPEND | os.O_WRONLY
+    elif "w" in mode:
+        flags |= os.O_TRUNC | os.O_WRONLY
+    else:
+        raise ValueError(f"unsupported private text mode: {mode}")
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return os.fdopen(fd, mode, encoding="utf-8")
+
+
 def _now() -> datetime:
     """Return the current local time."""
     return datetime.now()
@@ -1278,7 +1295,7 @@ class SessionStore:
         transcript_path = self.get_transcript_path(session_id)
         try:
             with self._lock:
-                with open(transcript_path, "a", encoding="utf-8") as f:
+                with _open_private_text(transcript_path, "a") as f:
                     f.write(json.dumps(message, ensure_ascii=False) + "\n")
         except OSError as e:
             # Disk full / read-only fs / permission errors must not crash the
@@ -1301,7 +1318,7 @@ class SessionStore:
         
         # JSONL: overwrite the file
         transcript_path = self.get_transcript_path(session_id)
-        with open(transcript_path, "w", encoding="utf-8") as f:
+        with _open_private_text(transcript_path, "w") as f:
             for msg in messages:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 

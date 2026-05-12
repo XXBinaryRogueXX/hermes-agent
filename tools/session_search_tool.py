@@ -25,8 +25,8 @@ import re
 from typing import Dict, Any, List, Optional, Union
 
 from agent.auxiliary_client import async_call_llm, extract_content_or_reasoning
-MAX_SESSION_CHARS = 100_000
-MAX_SUMMARY_TOKENS = 10000
+MAX_SESSION_CHARS = 80_000
+MAX_SUMMARY_TOKENS = 3000
 
 
 def _get_session_search_max_concurrency(default: int = 3) -> int:
@@ -48,6 +48,27 @@ def _get_session_search_max_concurrency(default: int = 3) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, min(value, 5))
+
+
+def _get_session_search_max_summary_tokens(default: int = MAX_SUMMARY_TOKENS) -> int:
+    """Read auxiliary.session_search.max_summary_tokens with safe bounds."""
+    try:
+        from hermes_cli.config import load_config
+        config = load_config()
+    except ImportError:
+        return default
+    aux = config.get("auxiliary", {}) if isinstance(config, dict) else {}
+    task_config = aux.get("session_search", {}) if isinstance(aux, dict) else {}
+    if not isinstance(task_config, dict):
+        return default
+    raw = task_config.get("max_summary_tokens")
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(512, min(value, 4000))
 
 
 def _format_timestamp(ts: Union[int, float, str, None]) -> str:
@@ -232,7 +253,7 @@ async def _summarize_session(
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.1,
-                max_tokens=MAX_SUMMARY_TOKENS,
+                max_tokens=_get_session_search_max_summary_tokens(),
             )
             content = extract_content_or_reasoning(response)
             if content:

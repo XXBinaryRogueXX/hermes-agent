@@ -1,6 +1,7 @@
 """Tests for gateway/mirror.py — session mirroring."""
 
 import json
+import stat
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -166,6 +167,7 @@ class TestAppendToJsonl:
         msg = json.loads(lines[0])
         assert msg["role"] == "assistant"
         assert msg["content"] == "Hello"
+        assert stat.S_IMODE(transcript.stat().st_mode) == 0o600
 
     def test_appends_multiple_messages(self, tmp_path):
         sessions_dir = tmp_path / "sessions"

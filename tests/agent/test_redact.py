@@ -236,6 +236,17 @@ class TestSecretCapturePayloadRedaction:
         result = redact_sensitive_text(text)
         assert "abc123def456" not in result
 
+    def test_app_password_field_redacted(self):
+        text = '{"app_password": "zoho-app-password-value"}'
+        result = redact_sensitive_text(text)
+        assert "zoho-app-password-value" not in result
+
+    def test_camel_case_oauth_fields_redacted(self):
+        text = '{"refreshToken": "refresh-value-123456789", "clientSecret": "client-secret-value"}'
+        result = redact_sensitive_text(text)
+        assert "refresh-value" not in result
+        assert "client-secret-value" not in result
+
 
 class TestElevenLabsTavilyExaKeys:
     """Regression tests for ElevenLabs (sk_), Tavily (tvly-), and Exa (exa_) keys."""
