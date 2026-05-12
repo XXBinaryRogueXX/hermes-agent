@@ -134,6 +134,19 @@ def _doctor_tool_availability_detail(toolset: str) -> str:
     return ""
 
 
+def _should_report_missing_tool_api_issue(unavailable: list[dict]) -> bool:
+    """Return True when optional API-key gaps should make doctor fail.
+
+    Missing API keys for optional toolsets are still shown as warnings in the
+    Tool Availability section. They only become a final doctor issue when the
+    operator explicitly asks for strict full-tool coverage.
+    """
+    strict = os.getenv("HERMES_DOCTOR_STRICT_FULL_TOOL_ACCESS", "").strip().lower()
+    if strict not in {"1", "true", "yes", "on"}:
+        return False
+    return any(item.get("missing_vars") or item.get("env_vars") for item in unavailable)
+
+
 def _apply_doctor_tool_availability_overrides(available: list[str], unavailable: list[dict]) -> tuple[list[str], list[dict]]:
     """Adjust runtime-gated tool availability for doctor diagnostics."""
     updated_available = list(available)
@@ -1560,9 +1573,9 @@ def run_doctor(args):
             else:
                 check_warn(item["name"], "(system dependency not met)")
 
-        # Count disabled tools with API key requirements
-        api_disabled = [u for u in unavailable if (u.get("missing_vars") or u.get("env_vars"))]
-        if api_disabled:
+        # Missing optional tool API keys are warnings above. Operators who want
+        # doctor to enforce complete optional-tool coverage can opt in via env.
+        if _should_report_missing_tool_api_issue(unavailable):
             issues.append("Run 'hermes setup' to configure missing API keys for full tool access")
     except Exception as e:
         check_warn("Could not check tool availability", f"({e})")

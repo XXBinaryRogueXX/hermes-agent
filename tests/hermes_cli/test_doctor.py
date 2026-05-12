@@ -167,6 +167,20 @@ class TestDoctorToolAvailabilityOverrides:
 
         assert doctor._doctor_tool_availability_detail("kanban") == "(runtime-gated; loaded only for dispatcher-spawned workers)"
 
+    def test_missing_optional_tool_api_keys_are_not_final_issues_by_default(self, monkeypatch):
+        monkeypatch.delenv("HERMES_DOCTOR_STRICT_FULL_TOOL_ACCESS", raising=False)
+
+        assert not doctor._should_report_missing_tool_api_issue(
+            [{"name": "rl", "env_vars": ["TINKER_API_KEY"]}]
+        )
+
+    def test_strict_full_tool_access_can_make_missing_api_keys_an_issue(self, monkeypatch):
+        monkeypatch.setenv("HERMES_DOCTOR_STRICT_FULL_TOOL_ACCESS", "1")
+
+        assert doctor._should_report_missing_tool_api_issue(
+            [{"name": "rl", "env_vars": ["TINKER_API_KEY"]}]
+        )
+
 
 class TestHonchoDoctorConfigDetection:
     def test_reports_configured_when_enabled_with_api_key(self, monkeypatch):
