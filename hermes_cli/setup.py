@@ -452,7 +452,11 @@ def _print_setup_summary(config: dict, hermes_home):
         if _img_backend:
             tool_status.append((f"Image Generation ({_img_backend})", True, None))
         else:
-            tool_status.append(("Image Generation", False, "FAL_KEY or OPENAI_API_KEY"))
+            tool_status.append((
+                "Image Generation",
+                False,
+                "FAL_KEY, OPENAI_API_KEY, MINIMAX_API_KEY, or XAI_API_KEY",
+            ))
 
     # TTS — show configured provider
     tts_provider = cfg_get(config, "tts", "provider", default="edge")

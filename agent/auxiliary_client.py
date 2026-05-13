@@ -303,6 +303,9 @@ _PROVIDER_VISION_MODELS: Dict[str, str] = {
 _PROVIDERS_WITHOUT_VISION: frozenset = frozenset({
     "kimi-coding",
     "kimi-coding-cn",
+    "minimax",
+    "minimax-cn",
+    "minimax-oauth",
 })
 
 # OpenRouter app attribution headers (base — always sent).
@@ -3154,6 +3157,72 @@ def resolve_provider_client(
             base_url=f"https://bedrock-runtime.{region}.amazonaws.com",
         )
         logger.debug("resolve_provider_client: bedrock (%s, %s)", final_model, region)
+        return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode
+                else (client, final_model))
+
+    elif pconfig.auth_type == "oauth_minimax":
+        if provider != "minimax-oauth":
+            logger.warning(
+                "resolve_provider_client: MiniMax OAuth auth_type used by "
+                "unexpected provider %s",
+                provider,
+            )
+            return None, None
+
+        try:
+            from hermes_cli.auth import resolve_minimax_oauth_runtime_credentials
+            from agent.anthropic_adapter import build_anthropic_client
+        except ImportError as exc:
+            logger.warning(
+                "resolve_provider_client: minimax-oauth requested but required "
+                "runtime modules are unavailable: %s",
+                exc,
+            )
+            return None, None
+
+        try:
+            creds = resolve_minimax_oauth_runtime_credentials()
+        except Exception as exc:
+            logger.warning(
+                "resolve_provider_client: minimax-oauth requested but OAuth "
+                "credentials could not be resolved: %s",
+                exc,
+            )
+            return None, None
+
+        api_key = str(creds.get("api_key", "")).strip()
+        raw_base_url = (
+            (explicit_base_url or creds.get("base_url") or pconfig.inference_base_url)
+        )
+        raw_base_url = str(raw_base_url or "").strip().rstrip("/")
+        if not api_key or not raw_base_url:
+            logger.warning(
+                "resolve_provider_client: minimax-oauth runtime credentials "
+                "are incomplete"
+            )
+            return None, None
+
+        default_model = _get_aux_model_for_provider(provider)
+        final_model = _normalize_resolved_model(model or default_model, provider)
+
+        try:
+            real_client = build_anthropic_client(api_key, raw_base_url)
+        except Exception as exc:
+            logger.warning(
+                "resolve_provider_client: could not build MiniMax OAuth "
+                "Anthropic client: %s",
+                exc,
+            )
+            return None, None
+
+        client = AnthropicAuxiliaryClient(
+            real_client,
+            final_model,
+            api_key,
+            raw_base_url,
+            is_oauth=False,
+        )
+        logger.debug("resolve_provider_client: minimax-oauth (%s)", final_model)
         return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode
                 else (client, final_model))
 

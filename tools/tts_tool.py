@@ -51,7 +51,7 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Callable, Dict, Any, Optional
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin
 
 from hermes_constants import display_hermes_home
 
@@ -159,9 +159,9 @@ DEFAULT_KITTENTTS_VOICE = "Jasper"
 DEFAULT_PIPER_VOICE = "en_US-lessac-medium"  # balanced size/quality
 DEFAULT_OPENAI_VOICE = "alloy"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_MINIMAX_MODEL = "speech-01"
-DEFAULT_MINIMAX_VOICE_ID = "female-shaonv"
-DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.chat/v1/text_to_speech"
+DEFAULT_MINIMAX_MODEL = "speech-2.8-hd"
+DEFAULT_MINIMAX_VOICE_ID = "English_expressive_narrator"
+DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1/t2a_v2"
 DEFAULT_MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
 DEFAULT_MISTRAL_TTS_VOICE_ID = "c69964a6-ab8b-4f8a-9465-ec0925096ec8"  # Paul - Neutral
 DEFAULT_XAI_VOICE_ID = "eve"
@@ -958,13 +958,105 @@ def _generate_xai_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -
 # ===========================================================================
 # Provider: MiniMax TTS
 # ===========================================================================
+
+def _minimax_tts_endpoint(base_url: str, group_id: str = "") -> str:
+    """Return the MiniMax T2A endpoint, adding GroupId only when configured."""
+    endpoint = str(base_url or DEFAULT_MINIMAX_BASE_URL).strip() or DEFAULT_MINIMAX_BASE_URL
+    group_id = str(group_id or "").strip()
+    if not group_id or "groupid=" in endpoint.lower():
+        return endpoint
+    separator = "&" if "?" in endpoint else "?"
+    return f"{endpoint}{separator}{urlencode({'GroupId': group_id})}"
+
+
+def _minimax_audio_format_for_path(output_path: str) -> str:
+    suffix = Path(output_path).suffix.lower().lstrip(".")
+    if suffix in {"mp3", "wav", "flac"}:
+        return suffix
+    return "mp3"
+
+
+def _minimax_config_number(
+    config: Dict[str, Any],
+    key: str,
+    default: float,
+    *,
+    integer: bool = False,
+) -> Any:
+    try:
+        value = float(config.get(key, default))
+    except (TypeError, ValueError):
+        value = float(default)
+    return int(value) if integer else value
+
+
+def _write_minimax_audio_bytes(
+    audio_bytes: bytes,
+    output_path: str,
+    *,
+    source_format: str,
+) -> None:
+    if not audio_bytes:
+        raise RuntimeError("MiniMax TTS returned empty audio data")
+
+    target = Path(output_path)
+    if target.suffix.lower() != ".ogg":
+        target.write_bytes(audio_bytes)
+        return
+
+    # MiniMax T2A does not emit Ogg/Opus. Honor explicit .ogg paths by
+    # transcoding a temporary mp3/wav/flac response when ffmpeg is available.
+    with tempfile.NamedTemporaryFile(suffix=f".{source_format}", delete=False) as tmp:
+        tmp.write(audio_bytes)
+        source_path = tmp.name
+    try:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            logger.warning(
+                "ffmpeg not found; writing MiniMax %s bytes to %s",
+                source_format,
+                output_path,
+            )
+            target.write_bytes(audio_bytes)
+            return
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-i",
+                source_path,
+                "-acodec",
+                "libopus",
+                "-ac",
+                "1",
+                "-b:a",
+                "64k",
+                "-vbr",
+                "off",
+                output_path,
+                "-y",
+                "-loglevel",
+                "error",
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="ignore")[:300]
+            raise RuntimeError(f"ffmpeg conversion failed: {stderr}")
+    finally:
+        try:
+            os.remove(source_path)
+        except OSError:
+            pass
+
+
 def _generate_minimax_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
     """
-    Generate audio using MiniMax TTS API (v1/text_to_speech).
+    Generate audio using MiniMax TTS API (v1/t2a_v2).
 
-    The current API (api.minimax.chat/v1/text_to_speech) uses a simple payload
-    and returns raw audio bytes directly (Content-Type: audio/mpeg), unlike
-    the deprecated v1/t2a_v2 endpoint which returned JSON with hex-encoded audio.
+    MiniMax's current synchronous T2A endpoint returns JSON with hex-encoded
+    audio by default. The parser also accepts raw audio and URL responses for
+    compatibility with older gateways and alternate output formats.
 
     Args:
         text: Text to convert (max 10,000 characters).
@@ -981,32 +1073,67 @@ def _generate_minimax_tts(text: str, output_path: str, tts_config: Dict[str, Any
         raise ValueError("MINIMAX_API_KEY not set. Get one at https://platform.minimax.io/")
 
     mm_config = tts_config.get("minimax", {})
-    model = mm_config.get("model", DEFAULT_MINIMAX_MODEL)
-    voice_id = mm_config.get("voice_id", DEFAULT_MINIMAX_VOICE_ID)
-    base_url = mm_config.get("base_url", DEFAULT_MINIMAX_BASE_URL)
+    model = str(mm_config.get("model", DEFAULT_MINIMAX_MODEL)).strip() or DEFAULT_MINIMAX_MODEL
+    voice_id = str(mm_config.get("voice_id", DEFAULT_MINIMAX_VOICE_ID)).strip() or DEFAULT_MINIMAX_VOICE_ID
+    base_url = str(
+        mm_config.get("base_url")
+        or get_env_value("MINIMAX_TTS_BASE_URL")
+        or DEFAULT_MINIMAX_BASE_URL
+    ).strip() or DEFAULT_MINIMAX_BASE_URL
+    group_id = str(mm_config.get("group_id") or get_env_value("MINIMAX_GROUP_ID") or "").strip()
+    audio_format = _minimax_audio_format_for_path(output_path)
+    timeout = _minimax_config_number(mm_config, "timeout", 60)
+
+    voice_setting = {
+        "voice_id": voice_id,
+        "speed": _minimax_config_number(mm_config, "speed", 1),
+        "vol": _minimax_config_number(mm_config, "vol", 1),
+        "pitch": _minimax_config_number(mm_config, "pitch", 0, integer=True),
+    }
+
+    audio_setting = {
+        "sample_rate": _minimax_config_number(mm_config, "sample_rate", 32000, integer=True),
+        "bitrate": _minimax_config_number(mm_config, "bitrate", 128000, integer=True),
+        "format": audio_format,
+        "channel": _minimax_config_number(mm_config, "channel", 1, integer=True),
+    }
 
     payload = {
         "model": model,
         "text": text,
-        "voice_id": voice_id,
+        "stream": False,
+        "language_boost": str(mm_config.get("language_boost", "auto") or "auto"),
+        "output_format": str(mm_config.get("output_format", "hex") or "hex"),
+        "voice_setting": voice_setting,
+        "audio_setting": audio_setting,
     }
+    for optional_key in (
+        "pronunciation_dict",
+        "voice_modify",
+        "subtitle_enable",
+        "subtitle_type",
+    ):
+        if optional_key in mm_config:
+            payload[optional_key] = mm_config[optional_key]
 
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
 
-    response = requests.post(base_url, json=payload, headers=headers, timeout=60)
+    response = requests.post(
+        _minimax_tts_endpoint(base_url, group_id),
+        json=payload,
+        headers=headers,
+        timeout=timeout,
+    )
 
     content_type = response.headers.get("Content-Type", "")
 
     if "audio/" in content_type:
-        # New API: returns raw audio directly
-        with open(output_path, "wb") as f:
-            f.write(response.content)
+        _write_minimax_audio_bytes(response.content, output_path, source_format=audio_format)
         return output_path
 
-    # Legacy / fallback: try parsing as JSON with hex-encoded audio
     try:
         result = response.json()
     except Exception:
@@ -1016,22 +1143,46 @@ def _generate_minimax_tts(text: str, output_path: str, tts_config: Dict[str, Any
             f"({len(response.content)} bytes)"
         )
 
-    base_resp = result.get("base_resp", {})
-    status_code = base_resp.get("status_code", -1)
+    if response.status_code >= 400:
+        err = result.get("error") or result.get("message") or response.text[:300]
+        raise RuntimeError(f"MiniMax TTS API error (HTTP {response.status_code}): {err}")
 
-    if status_code != 0:
+    base_resp = result.get("base_resp", {})
+    status_code = base_resp.get("status_code", 0)
+
+    if status_code not in (0, "0", None):
         status_msg = base_resp.get("status_msg", "unknown error")
         raise RuntimeError(f"MiniMax TTS API error (code {status_code}): {status_msg}")
 
-    hex_audio = result.get("data", {}).get("audio", "")
-    if not hex_audio:
+    data = result.get("data") or {}
+    audio_value = data.get("audio") or data.get("audio_file") or ""
+    audio_url = data.get("audio_url") or data.get("url") or ""
+    if isinstance(audio_value, str) and audio_value.startswith(("http://", "https://")):
+        audio_url = audio_value
+        audio_value = ""
+
+    if audio_url:
+        audio_response = requests.get(audio_url, timeout=timeout)
+        audio_response.raise_for_status()
+        _write_minimax_audio_bytes(
+            audio_response.content,
+            output_path,
+            source_format=audio_format,
+        )
+        return output_path
+
+    if not isinstance(audio_value, str) or not audio_value:
         raise RuntimeError("MiniMax TTS returned empty audio data")
 
-    # Legacy: hex-encoded audio
-    audio_bytes = bytes.fromhex(hex_audio)
+    try:
+        audio_bytes = bytes.fromhex(audio_value)
+    except ValueError:
+        try:
+            audio_bytes = base64.b64decode(audio_value)
+        except Exception as exc:
+            raise RuntimeError("MiniMax TTS audio data was not hex or base64") from exc
 
-    with open(output_path, "wb") as f:
-        f.write(audio_bytes)
+    _write_minimax_audio_bytes(audio_bytes, output_path, source_format=audio_format)
 
     return output_path
 

@@ -84,6 +84,61 @@ class TestMinimaxAuxModel:
         assert "highspeed" not in _get_aux_model_for_provider("minimax-cn")
 
 
+class TestMinimaxOAuthAuxClient:
+    """MiniMax OAuth should resolve directly instead of falling to API-key auto."""
+
+    def test_minimax_oauth_resolves_anthropic_aux_client(self):
+        from agent.auxiliary_client import AnthropicAuxiliaryClient, resolve_provider_client
+
+        with patch(
+            "hermes_cli.auth.resolve_minimax_oauth_runtime_credentials",
+            return_value={
+                "api_key": "oauth-token",
+                "base_url": "https://api.minimax.io/anthropic",
+                "source": "oauth",
+            },
+        ), patch(
+            "agent.anthropic_adapter.build_anthropic_client",
+            return_value=object(),
+        ) as mock_build, patch("agent.auxiliary_client.OpenAI") as mock_openai:
+            client, model = resolve_provider_client("minimax-oauth")
+
+        assert isinstance(client, AnthropicAuxiliaryClient)
+        assert model == "MiniMax-M2.7-highspeed"
+        assert client.api_key == "oauth-token"
+        assert client.base_url == "https://api.minimax.io/anthropic"
+        mock_build.assert_called_once_with("oauth-token", "https://api.minimax.io/anthropic")
+        mock_openai.assert_not_called()
+
+    def test_minimax_oauth_async_wraps_anthropic_aux_client(self):
+        from agent.auxiliary_client import AsyncAnthropicAuxiliaryClient, resolve_provider_client
+
+        with patch(
+            "hermes_cli.auth.resolve_minimax_oauth_runtime_credentials",
+            return_value={
+                "api_key": "oauth-token",
+                "base_url": "https://api.minimax.io/anthropic",
+                "source": "oauth",
+            },
+        ), patch(
+            "agent.anthropic_adapter.build_anthropic_client",
+            return_value=object(),
+        ):
+            client, model = resolve_provider_client("minimax-oauth", async_mode=True)
+
+        assert isinstance(client, AsyncAnthropicAuxiliaryClient)
+        assert model == "MiniMax-M2.7-highspeed"
+
+
+class TestMinimaxVisionRouting:
+    def test_minimax_chat_endpoints_are_not_treated_as_vision_backends(self):
+        from agent.auxiliary_client import _PROVIDERS_WITHOUT_VISION
+
+        assert "minimax" in _PROVIDERS_WITHOUT_VISION
+        assert "minimax-cn" in _PROVIDERS_WITHOUT_VISION
+        assert "minimax-oauth" in _PROVIDERS_WITHOUT_VISION
+
+
 class TestMinimaxBetaHeaders:
     """MiniMax Anthropic-compat endpoints reject fine-grained-tool-streaming beta.
 
