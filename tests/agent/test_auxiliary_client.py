@@ -2695,3 +2695,143 @@ class TestAuxUnhealthyCache:
             )
             # After the 402, OpenRouter is in the unhealthy cache.
             assert _is_provider_unhealthy("openrouter") is True
+
+
+# ---------------------------------------------------------------------------
+# oauth_minimax handler regression test
+# ---------------------------------------------------------------------------
+
+
+class TestMinimaxOAuthAuxiliaryClient:
+    """Regression: resolve_provider_client must handle oauth_minimax auth type."""
+
+    def test_resolve_provider_client_minimax_oauth_returns_anthropic_auxiliary_client(self, monkeypatch):
+        """When minimax-oauth is the provider, resolve_provider_client returns an
+        AnthropicAuxiliaryClient wired to the correct token and base URL."""
+        from collections import OrderedDict
+        from unittest.mock import MagicMock, patch
+
+        from hermes_cli.auth import ProviderConfig
+
+        # Minimal ProviderConfig for minimax-oauth
+        fake_registry = OrderedDict({
+            "minimax-oauth": ProviderConfig(
+                id="minimax-oauth",
+                name="MiniMax (OAuth)",
+                auth_type="oauth_minimax",
+                inference_base_url="https://api.minimax.io/anthropic",
+            ),
+        })
+
+        # Monkeypatch PROVIDER_REGISTRY so the code under test finds minimax-oauth
+        monkeypatch.setattr("hermes_cli.auth.PROVIDER_REGISTRY", fake_registry)
+
+        # Mock resolve_minimax_oauth_runtime_credentials to return valid creds
+        mock_creds = {
+            "api_key": "test-runtime-token-abc123",
+            "base_url": "https://api.minimax.io/anthropic",
+            "source": "minimax-oauth",
+        }
+        monkeypatch.setattr(
+            "hermes_cli.auth.resolve_minimax_oauth_runtime_credentials",
+            lambda: mock_creds,
+        )
+
+        # Mock build_anthropic_client to return a real-ish client we can inspect
+        mock_real_client = MagicMock()
+        mock_real_client.base_url = "https://api.minimax.io/anthropic"
+        mock_real_client.api_key = "test-runtime-token-abc123"
+        mock_build_calls = []
+        def mock_build(client_api_key, client_base_url):
+            mock_build_calls.append((client_api_key, client_base_url))
+            return mock_real_client
+        monkeypatch.setattr(
+            "agent.anthropic_adapter.build_anthropic_client",
+            mock_build,
+        )
+
+        # Run
+        from agent.auxiliary_client import resolve_provider_client
+        client, model = resolve_provider_client("minimax-oauth", "MiniMax-M2.7")
+
+        # Assert: client is AnthropicAuxiliaryClient
+        assert client.__class__.__name__ == "AnthropicAuxiliaryClient", \
+            f"expected AnthropicAuxiliaryClient, got {client.__class__.__name__}"
+
+        # Assert: model is resolved
+        assert model == "MiniMax-M2.7", f"expected model=MiniMax-M2.7, got {model!r}"
+
+        # Assert: build_anthropic_client was called with the runtime token + base URL
+        assert len(mock_build_calls) == 1, f"expected 1 build call, got {len(mock_build_calls)}"
+        built_key, built_url = mock_build_calls[0]
+        assert built_key == "test-runtime-token-abc123", \
+            f"expected token 'test-runtime-token-abc123', got {built_key!r}"
+        assert built_url == "https://api.minimax.io/anthropic", \
+            f"expected base URL 'https://api.minimax.io/anthropic', got {built_url!r}"
+
+    def test_resolve_provider_client_minimax_oauth_no_creds_returns_none_none(self, monkeypatch):
+        """When minimax-oauth credentials are missing, resolve_provider_client returns (None, None)."""
+        from collections import OrderedDict
+
+        from hermes_cli.auth import ProviderConfig
+
+        fake_registry = OrderedDict({
+            "minimax-oauth": ProviderConfig(
+                id="minimax-oauth",
+                name="MiniMax (OAuth)",
+                auth_type="oauth_minimax",
+                inference_base_url="https://api.minimax.io/anthropic",
+            ),
+        })
+        monkeypatch.setattr("hermes_cli.auth.PROVIDER_REGISTRY", fake_registry)
+
+        # Return empty creds (simulates expired/missing token)
+        monkeypatch.setattr(
+            "hermes_cli.auth.resolve_minimax_oauth_runtime_credentials",
+            lambda: {"api_key": "", "base_url": ""},
+        )
+
+        from agent.auxiliary_client import resolve_provider_client
+        client, model = resolve_provider_client("minimax-oauth", "MiniMax-M2.7")
+
+        assert client is None
+        assert model is None
+
+    def test_resolve_provider_client_minimax_oauth_async_mode(self, monkeypatch):
+        """oauth_minimax branch supports async_mode=True."""
+        from collections import OrderedDict
+        from unittest.mock import MagicMock
+
+        from hermes_cli.auth import ProviderConfig
+
+        fake_registry = OrderedDict({
+            "minimax-oauth": ProviderConfig(
+                id="minimax-oauth",
+                name="MiniMax (OAuth)",
+                auth_type="oauth_minimax",
+                inference_base_url="https://api.minimax.io/anthropic",
+            ),
+        })
+        monkeypatch.setattr("hermes_cli.auth.PROVIDER_REGISTRY", fake_registry)
+
+        mock_real_client = MagicMock()
+        mock_build_calls = []
+        def mock_build(key, url):
+            mock_build_calls.append((key, url))
+            return mock_real_client
+        monkeypatch.setattr(
+            "agent.anthropic_adapter.build_anthropic_client",
+            mock_build,
+        )
+        monkeypatch.setattr(
+            "hermes_cli.auth.resolve_minimax_oauth_runtime_credentials",
+            lambda: {"api_key": "async-test-token", "base_url": "https://api.minimax.io/anthropic"},
+        )
+
+        from agent.auxiliary_client import resolve_provider_client
+        client, model = resolve_provider_client("minimax-oauth", "MiniMax-M2.7", async_mode=True)
+
+        # async_mode returns AsyncAnthropicAuxiliaryClient wrapping the sync one
+        assert "Async" in client.__class__.__name__, \
+            f"expected async client wrapper, got {client.__class__.__name__}"
+        assert model == "MiniMax-M2.7"

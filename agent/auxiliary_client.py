@@ -3182,6 +3182,27 @@ def resolve_provider_client(
         return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode
                 else (client, final_model))
 
+    elif pconfig.auth_type == "oauth_minimax":
+        # MiniMax OAuth — use resolve_minimax_oauth_runtime_credentials() to get
+        # runtime token + base_url, then build an Anthropic-compatible client.
+        from hermes_cli.auth import resolve_minimax_oauth_runtime_credentials
+        creds = resolve_minimax_oauth_runtime_credentials()
+        token = str(creds.get("api_key", "")).strip()
+        base_url = str(creds.get("base_url", "")).strip().rstrip("/")
+        if not token or not base_url:
+            logger.warning(
+                "resolve_provider_client: minimax-oauth requested but "
+                "no credentials found (run: hermes auth)"
+            )
+            return None, None
+        final_model_raw = _get_aux_model_for_provider(provider)
+        final_model = _normalize_resolved_model(model or (final_model_raw or "MiniMax-M2.7"), provider)
+        from agent.anthropic_adapter import build_anthropic_client
+        real_client = build_anthropic_client(token, base_url)
+        client = AnthropicAuxiliaryClient(real_client, final_model, token, base_url, is_oauth=False)
+        return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode
+                else (client, final_model))
+
     elif pconfig.auth_type in {"oauth_device_code", "oauth_external"}:
         # OAuth providers — route through their specific try functions
         if provider == "nous":
