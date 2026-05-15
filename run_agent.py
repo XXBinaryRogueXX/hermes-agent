@@ -1269,6 +1269,25 @@ class AIAgent:
         self.base_url = base_url or ""
         provider_name = provider.strip().lower() if isinstance(provider, str) and provider.strip() else None
         self.provider = provider_name or ""
+        if self.provider == "minimax-oauth" and (not api_key or not base_url):
+            # MiniMax OAuth credentials include the authoritative Anthropic
+            # endpoint. Do not pair a freshly minted OAuth token with a stale
+            # or user-supplied base_url.
+            try:
+                from hermes_cli.auth import resolve_minimax_oauth_runtime_credentials
+
+                _mm_creds = resolve_minimax_oauth_runtime_credentials()
+                _mm_key = str(_mm_creds.get("api_key") or "").strip()
+                _mm_base = str(_mm_creds.get("base_url") or "").strip().rstrip("/")
+                if _mm_key:
+                    api_key = _mm_key
+                if _mm_base:
+                    base_url = _mm_base
+            except Exception:
+                # Credential errors are reported by the existing explicit-provider
+                # failure path below, keeping init-time fallback behavior intact.
+                pass
+        self.base_url = base_url or ""
         self.acp_command = acp_command or command
         self.acp_args = list(acp_args or args or [])
         if api_mode in {"chat_completions", "codex_responses", "anthropic_messages", "bedrock_converse", "codex_app_server"}:
@@ -1286,6 +1305,8 @@ class AIAgent:
         elif (provider_name is None) and self._base_url_hostname == "api.x.ai":
             self.api_mode = "codex_responses"
             self.provider = "xai"
+        elif self.provider == "minimax-oauth":
+            self.api_mode = "anthropic_messages"
         elif self.provider == "anthropic" or (provider_name is None and self._base_url_hostname == "api.anthropic.com"):
             self.api_mode = "anthropic_messages"
             self.provider = "anthropic"
@@ -1714,10 +1735,12 @@ class AIAgent:
                         # Look up the actual env var name from the provider
                         # config — some providers use non-standard names
                         # (e.g. alibaba → DASHSCOPE_API_KEY, not ALIBABA_API_KEY).
-                        _env_hint = f"{_explicit.upper()}_API_KEY"
+                        _env_hint = f"{_explicit.upper().replace('-', '_')}_API_KEY"
+                        _auth_type = ""
                         try:
                             from hermes_cli.auth import PROVIDER_REGISTRY
                             _pcfg = PROVIDER_REGISTRY.get(_explicit)
+                            _auth_type = getattr(_pcfg, "auth_type", "") if _pcfg else ""
                             if _pcfg and _pcfg.api_key_env_vars:
                                 _env_hint = _pcfg.api_key_env_vars[0]
                         except Exception:
@@ -1758,6 +1781,18 @@ class AIAgent:
                                 _fb_resolved = True
                                 break
                         if not _fb_resolved:
+                            if _auth_type == "oauth_minimax":
+                                raise RuntimeError(
+                                    f"Provider '{_explicit}' is set in config.yaml but MiniMax OAuth "
+                                    "credentials were not available. Run `hermes auth add minimax-oauth` "
+                                    "to re-authenticate, or switch to a different provider with `hermes model`."
+                                )
+                            if _auth_type in {"oauth_device_code", "oauth_external"}:
+                                raise RuntimeError(
+                                    f"Provider '{_explicit}' is set in config.yaml but OAuth credentials "
+                                    f"were not available. Run `hermes auth add {_explicit}` or `hermes model` "
+                                    "to re-authenticate, or switch to a different provider."
+                                )
                             raise RuntimeError(
                                 f"Provider '{_explicit}' is set in config.yaml but no API key "
                                 f"was found. Set the {_env_hint} environment "

@@ -24,6 +24,7 @@ from agent.auxiliary_client import (
     _is_payment_error,
     _is_rate_limit_error,
     _normalize_aux_provider,
+    _explicit_provider_unavailable_message,
     _try_payment_fallback,
     _resolve_auto,
     _CodexCompletionsAdapter,
@@ -32,13 +33,18 @@ from agent.auxiliary_client import (
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    """Strip provider env vars so each test starts clean."""
+    """Strip provider env vars and in-process health state so each test starts clean."""
+    from agent.auxiliary_client import _reset_aux_unhealthy_cache
+
+    _reset_aux_unhealthy_cache()
     for key in (
         "OPENROUTER_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_KEY",
         "OPENAI_MODEL", "LLM_MODEL", "NOUS_INFERENCE_BASE_URL",
         "ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
     ):
         monkeypatch.delenv(key, raising=False)
+    yield
+    _reset_aux_unhealthy_cache()
 
 
 @pytest.fixture
@@ -529,6 +535,60 @@ class TestExplicitProviderRouting:
             assert client is not None
             adapter = client.chat.completions
             assert adapter._is_oauth is False
+
+    def test_explicit_minimax_oauth_uses_oauth_runtime_credentials(self):
+        """minimax-oauth is OAuth-backed and must not require MINIMAX*_API_KEY."""
+        with (
+            patch("hermes_cli.auth.resolve_minimax_oauth_runtime_credentials", return_value={
+                "api_key": "minimax-oauth-access-token",
+                "base_url": "https://api.minimax.io/anthropic",
+                "source": "oauth",
+            }),
+            patch("agent.anthropic_adapter.build_anthropic_client") as mock_build,
+        ):
+            mock_build.return_value = MagicMock()
+            client, model = resolve_provider_client("minimax-oauth", model="MiniMax-M2.7")
+
+        assert client is not None
+        assert client.__class__.__name__ == "AnthropicAuxiliaryClient"
+        assert model == "MiniMax-M2.7"
+        assert client.api_key == "minimax-oauth-access-token"
+        assert client.base_url == "https://api.minimax.io/anthropic"
+        assert client.chat.completions._is_oauth is False
+        mock_build.assert_called_once_with(
+            "minimax-oauth-access-token", "https://api.minimax.io/anthropic"
+        )
+
+    def test_explicit_minimax_oauth_ignores_explicit_base_url_override(self):
+        """OAuth access tokens must only be sent to the runtime MiniMax endpoint."""
+        with (
+            patch("hermes_cli.auth.resolve_minimax_oauth_runtime_credentials", return_value={
+                "api_key": "minimax-oauth-access-token",
+                "base_url": "https://api.minimax.io/anthropic",
+                "source": "oauth",
+            }),
+            patch("agent.anthropic_adapter.build_anthropic_client") as mock_build,
+        ):
+            mock_build.return_value = MagicMock()
+            client, model = resolve_provider_client(
+                "minimax-oauth",
+                model="MiniMax-M2.7",
+                explicit_base_url="https://stale.example.invalid/anthropic",
+            )
+
+        assert client is not None
+        assert model == "MiniMax-M2.7"
+        assert client.base_url == "https://api.minimax.io/anthropic"
+        mock_build.assert_called_once_with(
+            "minimax-oauth-access-token", "https://api.minimax.io/anthropic"
+        )
+
+    def test_minimax_oauth_missing_credentials_hint_mentions_oauth_not_api_key(self):
+        msg = _explicit_provider_unavailable_message("minimax-oauth")
+        assert "MiniMax OAuth credentials" in msg
+        assert "hermes auth add minimax-oauth" in msg
+        assert "MINIMAX-OAUTH_API_KEY" not in msg
+        assert "MINIMAX_OAUTH_API_KEY" not in msg
 
     def test_explicit_openrouter_pool_exhausted_logs_precise_warning(self, monkeypatch, caplog):
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
@@ -2037,11 +2097,14 @@ class TestVisionAutoSkipsKimiCoding:
         gcc_mock.assert_called_once()
 
     def test_skip_set_covers_exactly_known_entries(self):
-        """Guard against accidental widening of the skip list."""
+        """Guard against accidental widening of the no-vision provider skip list."""
         from agent.auxiliary_client import _PROVIDERS_WITHOUT_VISION
         assert _PROVIDERS_WITHOUT_VISION == frozenset({
             "kimi-coding",
             "kimi-coding-cn",
+            "minimax",
+            "minimax-cn",
+            "minimax-oauth",
         })
 
 

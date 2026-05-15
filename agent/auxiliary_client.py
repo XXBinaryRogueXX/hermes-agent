@@ -1408,18 +1408,21 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
 def _try_openrouter(explicit_api_key: str = None) -> Tuple[Optional[OpenAI], Optional[str]]:
     pool_present, entry = _select_pool_entry("openrouter")
     if pool_present:
-        or_key = explicit_api_key or _pool_runtime_api_key(entry)
+        # Prefer a live pool entry, but do not let an exhausted/incomplete pool
+        # mask an explicitly supplied key or OPENROUTER_API_KEY. Tests and some
+        # mixed setups rely on env credentials remaining usable when the pool
+        # has no currently selectable entry.
+        or_key = explicit_api_key or _pool_runtime_api_key(entry) or os.getenv("OPENROUTER_API_KEY")
         if not or_key:
-            _mark_provider_unhealthy("openrouter", ttl=60)
             return None, None
         base_url = _pool_runtime_base_url(entry, OPENROUTER_BASE_URL) or OPENROUTER_BASE_URL
-        logger.debug("Auxiliary client: OpenRouter via pool")
+        source = "pool" if _pool_runtime_api_key(entry) else "env/explicit fallback"
+        logger.debug("Auxiliary client: OpenRouter via %s", source)
         return OpenAI(api_key=or_key, base_url=base_url,
                        default_headers=build_or_headers()), _OPENROUTER_MODEL
 
     or_key = explicit_api_key or os.getenv("OPENROUTER_API_KEY")
     if not or_key:
-        _mark_provider_unhealthy("openrouter", ttl=60)
         return None, None
     logger.debug("Auxiliary client: OpenRouter")
     return OpenAI(api_key=or_key, base_url=OPENROUTER_BASE_URL,
@@ -1459,7 +1462,6 @@ def _try_nous(vision: bool = False) -> Tuple[Optional[OpenAI], Optional[str]]:
     nous = _read_nous_auth()
     runtime = _resolve_nous_runtime_api(force_refresh=False)
     if runtime is None and not nous:
-        _mark_provider_unhealthy("nous", ttl=60)
         return None, None
     global auxiliary_is_nous
     auxiliary_is_nous = True
@@ -2841,6 +2843,66 @@ def resolve_provider_client(
         return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode
                 else (client, final_model))
 
+    # ── MiniMax OAuth (OAuth → Anthropic Messages API) ────────────────
+    if provider == "minimax-oauth":
+        try:
+            from hermes_cli.auth import resolve_minimax_oauth_runtime_credentials
+
+            creds = resolve_minimax_oauth_runtime_credentials()
+        except Exception as exc:
+            logger.warning(
+                "resolve_provider_client: minimax-oauth requested but MiniMax "
+                "OAuth credentials are unavailable (run: hermes auth add "
+                "minimax-oauth): %s",
+                exc,
+            )
+            return None, None
+
+        api_key = str(creds.get("api_key") or "").strip()
+        raw_base_url = str(creds.get("base_url") or "").strip().rstrip("/")
+        if explicit_base_url and str(explicit_base_url).strip().rstrip("/") != raw_base_url:
+            logger.warning(
+                "resolve_provider_client: ignoring explicit base_url override for "
+                "minimax-oauth; using OAuth runtime endpoint"
+            )
+        if not api_key or not raw_base_url:
+            logger.warning(
+                "resolve_provider_client: minimax-oauth runtime credentials "
+                "were incomplete (run: hermes auth add minimax-oauth)"
+            )
+            return None, None
+
+        final_model = (
+            _normalize_resolved_model(
+                model or _get_aux_model_for_provider(provider) or "MiniMax-M2.7",
+                provider,
+            )
+            or "MiniMax-M2.7"
+        )
+        try:
+            from agent.anthropic_adapter import build_anthropic_client
+
+            real_client = build_anthropic_client(api_key, raw_base_url)
+        except ImportError:
+            logger.warning(
+                "resolve_provider_client: minimax-oauth requested but the "
+                "anthropic SDK is not installed"
+            )
+            return None, None
+        except Exception as exc:
+            logger.warning(
+                "resolve_provider_client: failed to build MiniMax OAuth "
+                "Anthropic client: %s",
+                exc,
+            )
+            return None, None
+
+        client = AnthropicAuxiliaryClient(
+            real_client, final_model, api_key, raw_base_url, is_oauth=False
+        )
+        return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode
+                else (client, final_model))
+
     # ── Custom endpoint (OPENAI_BASE_URL + OPENAI_API_KEY) ───────────
     if provider == "custom":
         if explicit_base_url:
@@ -3969,6 +4031,40 @@ def _get_task_extra_body(task: str) -> Dict[str, Any]:
     return {}
 
 
+def _explicit_provider_unavailable_message(provider: str) -> str:
+    """Return a credential hint for an explicitly configured auxiliary provider."""
+    explicit = (provider or "").strip().lower()
+    try:
+        from hermes_cli.auth import PROVIDER_REGISTRY
+
+        pconfig = PROVIDER_REGISTRY.get(explicit)
+    except Exception:
+        pconfig = None
+
+    auth_type = getattr(pconfig, "auth_type", "") if pconfig else ""
+    if auth_type == "oauth_minimax":
+        return (
+            f"Provider '{explicit}' is set in config.yaml but MiniMax OAuth "
+            "credentials were not available. Run `hermes auth add minimax-oauth` "
+            "to re-authenticate, or switch to a different provider with `hermes model`."
+        )
+    if auth_type in {"oauth_device_code", "oauth_external"}:
+        return (
+            f"Provider '{explicit}' is set in config.yaml but OAuth credentials "
+            f"were not available. Run `hermes auth add {explicit}` or `hermes model` "
+            "to re-authenticate, or switch to a different provider."
+        )
+
+    env_hint = f"{explicit.upper().replace('-', '_')}_API_KEY"
+    if pconfig and getattr(pconfig, "api_key_env_vars", None):
+        env_hint = pconfig.api_key_env_vars[0]
+    return (
+        f"Provider '{explicit}' is set in config.yaml but no API key was found. "
+        f"Set the {env_hint} environment variable, or switch to a different "
+        "provider with `hermes model`."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Anthropic-compatible endpoint detection + image block conversion
 # ---------------------------------------------------------------------------
@@ -4241,11 +4337,7 @@ def call_llm(
             # through OpenRouter (which causes confusing 404s).
             _explicit = (resolved_provider or "").strip().lower()
             if _explicit and _explicit not in {"auto", "openrouter", "custom"}:
-                raise RuntimeError(
-                    f"Provider '{_explicit}' is set in config.yaml but no API key "
-                    f"was found. Set the {_explicit.upper()}_API_KEY environment "
-                    f"variable, or switch to a different provider with `hermes model`."
-                )
+                raise RuntimeError(_explicit_provider_unavailable_message(_explicit))
             # For auto/custom with no credentials, try the full auto chain
             # rather than hardcoding OpenRouter (which may be depleted).
             # Pass model=None so each provider uses its own default —
@@ -4610,11 +4702,7 @@ async def async_call_llm(
         if client is None:
             _explicit = (resolved_provider or "").strip().lower()
             if _explicit and _explicit not in {"auto", "openrouter", "custom"}:
-                raise RuntimeError(
-                    f"Provider '{_explicit}' is set in config.yaml but no API key "
-                    f"was found. Set the {_explicit.upper()}_API_KEY environment "
-                    f"variable, or switch to a different provider with `hermes model`."
-                )
+                raise RuntimeError(_explicit_provider_unavailable_message(_explicit))
             if not resolved_base_url:
                 logger.info("Auxiliary %s: provider %s unavailable, trying auto-detection chain",
                             task or "call", resolved_provider)
