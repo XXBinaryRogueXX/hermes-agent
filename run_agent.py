@@ -51,8 +51,11 @@ import threading
 from types import SimpleNamespace
 import urllib.request
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from urllib.parse import urlparse, parse_qs, urlunparse
+
+if TYPE_CHECKING:
+    from agent.rate_limit_tracker import RateLimitState
 # NOTE: `from openai import OpenAI` is deliberately NOT at module top — the
 # SDK pulls ~240 ms of imports. We expose `OpenAI` as a thin proxy object
 # that imports the SDK on first call/isinstance check. This preserves:
@@ -4303,6 +4306,7 @@ class AIAgent:
             except Exception:
                 pass
             review_agent = None
+            review_messages_snapshot: List[Dict] = []
             try:
                 with open(os.devnull, "w", encoding="utf-8") as _devnull, \
                      contextlib.redirect_stdout(_devnull), \
@@ -4408,6 +4412,15 @@ class AIAgent:
                     finally:
                         clear_thread_tool_whitelist()
 
+                    # Capture the review agent's messages before teardown so
+                    # the user-visible self-improvement summary can report any
+                    # memory/skill writes the fork performed. ``close()`` may
+                    # release provider/session state, and ``review_agent`` is
+                    # nulled below to mark normal cleanup complete.
+                    review_messages_snapshot = list(
+                        getattr(review_agent, "_session_messages", []) or []
+                    )
+
                     # Tear down memory providers while stdout is still
                     # redirected so background thread teardown (Honcho flush,
                     # Hindsight sync, etc.) stays silent.  The finally block
@@ -4429,7 +4442,7 @@ class AIAgent:
                 # re-surface stale "created"/"updated" messages from the prior
                 # conversation as if they just happened (issue #14944).
                 actions = self._summarize_background_review_actions(
-                    getattr(review_agent, "_session_messages", []),
+                    review_messages_snapshot,
                     messages_snapshot,
                 )
 

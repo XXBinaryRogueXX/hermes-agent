@@ -5,6 +5,7 @@ Handles: hermes gateway [run|start|stop|restart|status|install|uninstall|setup]
 """
 
 import asyncio
+import logging
 import os
 import shutil
 import signal
@@ -37,6 +38,8 @@ from hermes_cli.setup import (
     prompt, prompt_choice, prompt_yes_no,
 )
 from hermes_cli.colors import Colors, color
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================

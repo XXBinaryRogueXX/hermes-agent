@@ -26,8 +26,8 @@ __all__ = [
     "BasePlatformAdapter",
     "MessageEvent",
     "SendResult",
-    "QQAdapter",
-    "YuanbaoAdapter",
+    "QQAdapter",  # noqa: F822 - lazy-loaded via module __getattr__ below
+    "YuanbaoAdapter",  # noqa: F822 - lazy-loaded via module __getattr__ below
 ]
 
 
