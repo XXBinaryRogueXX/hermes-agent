@@ -1,0 +1,7 @@
+name: minimax
+version: 1.0.0
+description: "MiniMax Hailuo video generation backend. Supports text-to-video and first-frame image-to-video via MiniMax /v1/video_generation."
+author: NousResearch
+kind: backend
+requires_env:
+  - MINIMAX_API_KEY

@@ -170,9 +170,59 @@ HERMES_INFERENCE_PROVIDER=minimax-oauth hermes
 | `MiniMax-M2.7` | Long-context reasoning, complex tool-calling |
 | `MiniMax-M2.7-highspeed` | Lower latency, lighter tasks, auxiliary calls |
 
-Both models support up to 200,000 tokens of context.
+Both models support up to 204,800 tokens of context.
 
 `MiniMax-M2.7-highspeed` is also used automatically as the auxiliary model for vision and delegation tasks when `minimax-oauth` is the primary provider.
+
+## Official MiniMax Companion Repos
+
+Hermes tracks the official MiniMax GitHub org for capabilities that are useful as companion integrations:
+
+- [`MiniMax-AI/cli`](https://github.com/MiniMax-AI/cli): official `mmx` CLI for text, image, video, speech, music, search, vision, and quota checks.
+- [`MiniMax-AI/MiniMax-MCP`](https://github.com/MiniMax-AI/MiniMax-MCP): official Python MCP server for speech, image, music, voice, and Hailuo video generation.
+- [`MiniMax-AI/skills`](https://github.com/MiniMax-AI/skills): official Skills Hub source; Hermes treats this repo as a trusted default tap alongside OpenAI/Anthropic skills.
+- [`MiniMax-AI/MiniMax-Provider-Verifier`](https://github.com/MiniMax-AI/MiniMax-Provider-Verifier): optional QA harness for checking MiniMax M2/M2.7 deployments, especially tool-calling schema fidelity.
+
+## Video Generation
+
+Hermes ships a native `video_gen` backend named `minimax` that mirrors the official MiniMax MCP Hailuo video flow:
+
+```yaml
+video_gen:
+  provider: minimax
+  model: MiniMax-Hailuo-2.3
+  use_gateway: false
+```
+
+It submits to `/v1/video_generation`, polls `/v1/query/video_generation`, retrieves the final video via `/v1/files/retrieve`, and returns the download URL through the unified `video_generate` tool.
+
+Supported modes:
+
+- Text-to-video: provide `prompt` only.
+- First-frame image-to-video: provide `prompt` and `image_url`; local image paths are converted to data URLs.
+
+Authentication order:
+
+1. `MINIMAX_API_KEY` plus optional `MINIMAX_API_HOST` / `MINIMAX_BASE_URL`.
+2. MiniMax OAuth runtime credentials from `hermes auth add minimax-oauth`; Hermes strips the `/anthropic` suffix before calling media endpoints.
+
+Cost/quota note: Hailuo video generation is paid/quota-gated. Check the official CLI before enabling it for unattended workflows:
+
+```bash
+scripts/minimax-quota-check.sh
+```
+
+The `minimax-media` MCP server can expose the same video capabilities as `generate_video` and `query_video_generation`. If you enable those MCP tools, restart Hermes or run `/reload-mcp` so the active gateway process discovers them.
+
+## Provider Verification
+
+For provider or aggregator changes, use the optional verifier wrapper:
+
+```bash
+scripts/minimax-provider-verify.sh --model MiniMax-M2.7 --base-url https://api.minimax.io/v1 --sample sample.jsonl
+```
+
+The wrapper clones/runs `MiniMax-AI/MiniMax-Provider-Verifier` in a temp/cache directory and passes the API key through the environment. It does not print or store secret values in docs.
 
 ## Troubleshooting
 

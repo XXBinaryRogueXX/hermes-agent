@@ -89,6 +89,11 @@ class TestTrustLevelFor:
             repo = next(iter(TRUSTED_REPOS))
             assert src.trust_level_for(f"{repo}/some-skill") == "trusted"
 
+    def test_minimax_skills_repo_is_trusted_default_tap(self):
+        src = self._source()
+        assert {"repo": "MiniMax-AI/skills", "path": "skills/"} in GitHubSource.DEFAULT_TAPS
+        assert src.trust_level_for("MiniMax-AI/skills/minimax-docx") == "trusted"
+
     def test_community_repo(self):
         src = self._source()
         assert src.trust_level_for("random-user/random-repo/skill") == "community"

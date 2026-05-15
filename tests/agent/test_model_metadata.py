@@ -210,6 +210,33 @@ class TestDefaultContextLengths:
                     f"{model_id}: expected {expected_ctx}, got {actual}"
                 )
 
+    def test_minimax_m2_direct_ids_have_204800_context(self):
+        from agent.model_metadata import get_model_context_length
+        from unittest.mock import patch as mock_patch
+
+        expected_keys = {
+            "minimax-m2.7-highspeed",
+            "minimax-m2.7",
+            "minimax-m2.5",
+            "minimax-m2.1",
+            "minimax-m2",
+        }
+        for key in expected_keys:
+            assert DEFAULT_CONTEXT_LENGTHS[key] == 204800
+
+        with mock_patch("agent.model_metadata.fetch_model_metadata", return_value={}), \
+             mock_patch("agent.model_metadata.fetch_endpoint_model_metadata", return_value={}), \
+             mock_patch("agent.model_metadata.get_cached_context_length", return_value=None), \
+             mock_patch("agent.models_dev.lookup_models_dev_context", return_value=None):
+            for model_id in [
+                "MiniMax-M2.7-highspeed",
+                "MiniMax-M2.7",
+                "minimax/MiniMax-M2.5",
+                "MiniMax-M2.1",
+                "MiniMax-M2",
+            ]:
+                assert get_model_context_length(model_id) == 204800
+
     def test_deepseek_v4_models_1m_context(self):
         from agent.model_metadata import get_model_context_length
         from unittest.mock import patch as mock_patch

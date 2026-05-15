@@ -258,7 +258,7 @@ def _missing_provider_error(configured: Optional[str]) -> str:
         ))
     msg = (
         "No video generation backend is configured. Run `hermes tools` → "
-        "Video Generation to enable one (xAI, FAL, or Google Veo)."
+        "Video Generation to enable one (MiniMax Hailuo, xAI, FAL, or Google Veo)."
     )
     return json.dumps(error_response(
         error=msg, error_type="no_provider_configured",
@@ -532,6 +532,8 @@ def _build_dynamic_video_schema() -> Dict[str, Any]:
         parts.append(
             f"- duration range: {caps['min_duration']}-{caps['max_duration']}s"
         )
+    if caps.get("cost_warning"):
+        parts.append(f"- cost/quota: {caps['cost_warning']}")
     if caps.get("supports_audio"):
         parts.append("- audio: pass `audio=true` to enable native audio (pricing tier)")
     if caps.get("supports_negative_prompt"):

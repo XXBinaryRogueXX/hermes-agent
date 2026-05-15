@@ -197,8 +197,16 @@ DEFAULT_CONTEXT_LENGTHS = {
     "qwen3-coder-plus": 1000000,  # 1M context
     "qwen3-coder": 262144,        # 256K context
     "qwen": 131072,
-    # MiniMax — official docs: 204,800 context for all models
+    # MiniMax — official docs: 204,800 context for current M2.x models.
+    # Keep direct IDs here because MiniMax API-key/CN endpoints do not expose
+    # a reliable /models context field, and OAuth/highspeed variants should not
+    # probe down to the generic fallback when models.dev is unavailable.
     # https://platform.minimax.io/docs/api-reference/text-anthropic-api
+    "minimax-m2.7-highspeed": 204800,
+    "minimax-m2.7": 204800,
+    "minimax-m2.5": 204800,
+    "minimax-m2.1": 204800,
+    "minimax-m2": 204800,
     "minimax": 204800,
     # GLM
     "glm": 202752,
