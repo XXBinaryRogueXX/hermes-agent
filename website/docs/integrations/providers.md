@@ -286,10 +286,12 @@ hermes chat --provider kimi-coding-cn --model kimi-k2.5
 
 # MiniMax (global endpoint)
 hermes chat --provider minimax --model MiniMax-M2.7
+hermes chat --provider minimax --model MiniMax-M2.7-highspeed
 # Requires: MINIMAX_API_KEY in ~/.hermes/.env
 
 # MiniMax (China endpoint)
 hermes chat --provider minimax-cn --model MiniMax-M2.7
+hermes chat --provider minimax-cn --model MiniMax-M2.7-highspeed
 # Requires: MINIMAX_CN_API_KEY in ~/.hermes/.env
 
 # Alibaba Cloud / DashScope (Qwen models)
@@ -480,7 +482,7 @@ model:
   default: "MiniMax-M2.7"
 ```
 
-Supported models: `MiniMax-M2.7` (main) and `MiniMax-M2.7-highspeed` (wired as the default auxiliary model). The OAuth path ignores `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`.
+Supported models: `MiniMax-M2.7` (main) and `MiniMax-M2.7-highspeed` (lower latency; wired as the default auxiliary model for OAuth). The API-key providers (`minimax`, `minimax-cn`) now expose both in the curated picker as well. The OAuth path ignores `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`.
 
 :::tip MiniMax OAuth vs API key
 `minimax-oauth` uses MiniMax's consumer-facing portal with OAuth login — no billing setup required. The `minimax` and `minimax-cn` providers use `MINIMAX_API_KEY` / `MINIMAX_CN_API_KEY` — for programmatic access. See the [MiniMax OAuth guide](/docs/guides/minimax-oauth) for a full walkthrough.

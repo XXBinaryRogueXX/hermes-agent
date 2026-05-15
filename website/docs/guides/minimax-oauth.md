@@ -174,6 +174,93 @@ Both models support up to 200,000 tokens of context.
 
 `MiniMax-M2.7-highspeed` is also used automatically as the auxiliary model for vision and delegation tasks when `minimax-oauth` is the primary provider.
 
+The API-key providers (`minimax` and `minimax-cn`) expose the same curated model picker entries, including `MiniMax-M2.7-highspeed`.
+
+## Official MiniMax CLI (`mmx`)
+
+Hermes ships an optional `mmx-cli` skill for MiniMax's official terminal CLI. Use it when you need MiniMax capabilities beyond Hermes' native provider adapter, especially video generation, music generation, voice design, MiniMax web search, vision describe, file upload/list/delete, or Token Plan quota checks.
+
+```bash
+# Install and authenticate the official CLI
+npm install -g mmx-cli
+mmx auth login
+
+# Agent-friendly examples
+mmx text chat --model MiniMax-M2.7-highspeed --message "user:Say hi" --output json --quiet
+mmx video generate --prompt "Ocean waves at sunset" --async --output json --quiet
+mmx music generate --prompt "lofi instrumental" --instrumental --out song.mp3 --quiet
+mmx search "MiniMax AI latest news" --output json --quiet
+mmx quota --output json --quiet
+```
+
+Install the optional skill with:
+
+```bash
+hermes skills install mmx-cli
+```
+
+:::note
+The official `mmx` CLI keeps its own auth state under `~/.mmx/`. Hermes' `minimax-oauth` login does not automatically log in `mmx`; run `mmx auth login` for the CLI, or pass a MiniMax API key through environment variables for one-off calls. Do not copy OAuth access tokens into chat or committed files.
+:::
+
+## MiniMax MCP presets
+
+Hermes' MCP CLI includes presets for the official MiniMax MCP servers.
+
+### OAuth-backed presets, no persistent MiniMax API key
+
+These wrap the official `uvx` MCP packages and export the short-lived Hermes `minimax-oauth` access token only to the child MCP process:
+
+```bash
+# Media generation tools: text_to_audio, list_voices, voice_clone,
+# generate_video, query_video_generation, text_to_image, music_generation,
+# voice_design.
+hermes mcp add minimax-media --preset minimax-oauth
+
+# Coding Plan search + vision tools: web_search, understand_image.
+hermes mcp add minimax-coding --preset minimax-coding-plan-oauth
+```
+
+### API-key presets
+
+If you prefer API-key auth, set the key in `~/.hermes/.env` and use the direct presets:
+
+```bash
+# Edit ~/.hermes/.env or use your preferred secret manager to set:
+# MINIMAX_API_KEY=<your-key>
+# MINIMAX_API_HOST=https://api.minimax.io
+
+hermes mcp add minimax-media --preset minimax
+hermes mcp add minimax-coding --preset minimax-coding-plan
+```
+
+For China-region keys, use `https://api.minimaxi.com` as `MINIMAX_API_HOST`. Restart or start a new Hermes session after adding MCP servers so their tools are discovered.
+
+:::warning Cost-bearing tools
+MiniMax MCP media tools can spend Token Plan quota. Use `mmx quota` or MiniMax's Token Plan dashboard before running large image, video, speech, or music jobs.
+:::
+
+## Provider smoke verifier
+
+Hermes includes a lightweight smoke verifier inspired by MiniMax-AI's Provider Verifier. It checks reachability, non-empty content, tool-call triggering/schema accuracy, language following, and tool argument property order for official or third-party MiniMax endpoints.
+
+```bash
+# Default: use Hermes minimax-oauth credentials
+python scripts/minimax_provider_smoke.py --provider minimax-oauth --json
+
+# API-key provider
+MINIMAX_API_KEY=sk-... python scripts/minimax_provider_smoke.py --provider minimax --model MiniMax-M2.7
+
+# Third-party Anthropic-compatible MiniMax gateway
+MINIMAX_GATEWAY_KEY=... python scripts/minimax_provider_smoke.py \
+  --provider custom-minimax \
+  --base-url https://gateway.example.com/anthropic \
+  --api-key-env MINIMAX_GATEWAY_KEY \
+  --model MiniMax-M2.7
+```
+
+The script redacts keys in output and exits non-zero when critical checks fail.
+
 ## Troubleshooting
 
 ### Token expired — not re-logging in automatically

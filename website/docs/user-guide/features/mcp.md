@@ -52,6 +52,26 @@ List the files in /home/user/projects and summarize the repo structure.
 
 Hermes will discover the MCP server's tools and use them like any other tool.
 
+## Built-in presets
+
+`hermes mcp add` supports named presets for common stdio MCP servers. Presets fill in the command, args, and any safe environment-variable templates; discovery still runs before the server is saved.
+
+```bash
+# MiniMax media generation MCP via Hermes MiniMax OAuth
+hermes mcp add minimax-media --preset minimax-oauth
+
+# MiniMax Coding Plan MCP (web_search + understand_image) via Hermes OAuth
+hermes mcp add minimax-coding --preset minimax-coding-plan-oauth
+
+# API-key variants; set MINIMAX_API_KEY and MINIMAX_API_HOST in ~/.hermes/.env first
+hermes mcp add minimax-media --preset minimax
+hermes mcp add minimax-coding --preset minimax-coding-plan
+```
+
+MiniMax OAuth presets execute Hermes' `hermes_cli.minimax_mcp_oauth_stdio` wrapper. The wrapper resolves the short-lived `minimax-oauth` token at process start, exports it as `MINIMAX_API_KEY` only for the child MCP process, and then execs the official `uvx` package. This avoids persisting a MiniMax API key when OAuth is available.
+
+The official MiniMax MCP tools can spend Token Plan quota, especially image, video, speech, and music generation. Verify quota before costful jobs.
+
 ## Two kinds of MCP servers
 
 ### Stdio servers
