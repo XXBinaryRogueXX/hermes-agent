@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import re
+import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -35,6 +36,43 @@ _MCP_PRESETS: Dict[str, Dict[str, Any]] = {
     "codex": {
         "command": "codex",
         "args": ["mcp-server"],
+    },
+    "minimax": {
+        "display_name": "MiniMax MCP (media generation)",
+        "command": "uvx",
+        "args": ["minimax-mcp", "-y"],
+        "env": {
+            "MINIMAX_API_KEY": "${MINIMAX_API_KEY}",
+            "MINIMAX_API_HOST": "https://api.minimax.io",
+            "MINIMAX_API_RESOURCE_MODE": "url",
+        },
+    },
+    "minimax-coding-plan": {
+        "display_name": "MiniMax Coding Plan MCP (search + vision)",
+        "command": "uvx",
+        "args": ["minimax-coding-plan-mcp"],
+        "env": {
+            "MINIMAX_API_KEY": "${MINIMAX_API_KEY}",
+            "MINIMAX_API_HOST": "https://api.minimax.io",
+        },
+    },
+    "minimax-oauth": {
+        "display_name": "MiniMax MCP via Hermes MiniMax OAuth",
+        "command": sys.executable,
+        "args": [
+            "-m", "hermes_cli.minimax_mcp_oauth_stdio", "minimax-mcp", "-y",
+        ],
+        "env": {
+            "MINIMAX_API_RESOURCE_MODE": "url",
+        },
+    },
+    "minimax-coding-plan-oauth": {
+        "display_name": "MiniMax Coding Plan MCP via Hermes MiniMax OAuth",
+        "command": sys.executable,
+        "args": [
+            "-m", "hermes_cli.minimax_mcp_oauth_stdio",
+            "minimax-coding-plan-mcp",
+        ],
     },
 }
 
@@ -157,6 +195,12 @@ def _apply_mcp_preset(
         server_config["command"] = command
     if cmd_args:
         server_config["args"] = cmd_args
+    preset_env = preset.get("env")
+    if isinstance(preset_env, dict) and preset_env:
+        server_config["env"] = dict(preset_env)
+    for key in ("timeout", "connect_timeout"):
+        if key in preset:
+            server_config[key] = preset[key]
 
     return url, command, cmd_args, True
 
@@ -176,7 +220,22 @@ def _probe_single_server(
         _run_on_mcp_loop,
         _connect_server,
         _stop_mcp_loop,
+        _interpolate_env_vars,
     )
+
+    # Discovery happens before the server has been saved and reloaded through
+    # tools.mcp_tool._load_mcp_config(), so mirror the runtime .env loading and
+    # ${VAR} interpolation path here. This lets presets such as MiniMax resolve
+    # keys from ~/.hermes/.env during `hermes mcp add` instead of passing literal
+    # placeholders to the child process.
+    try:
+        from hermes_cli.env_loader import load_hermes_dotenv
+
+        load_hermes_dotenv()
+    except Exception:
+        pass
+
+    probe_config = _interpolate_env_vars(config)
 
     _ensure_mcp_loop()
 
@@ -184,7 +243,7 @@ def _probe_single_server(
 
     async def _probe():
         server = await asyncio.wait_for(
-            _connect_server(name, config), timeout=connect_timeout
+            _connect_server(name, probe_config), timeout=connect_timeout
         )
         for t in server._tools:
             desc = getattr(t, "description", "") or ""
@@ -260,6 +319,7 @@ def cmd_mcp_add(args):
         _info("Examples:")
         _info('  hermes mcp add ink --url "https://mcp.ml.ink/mcp"')
         _info('  hermes mcp add github --command npx --args @modelcontextprotocol/server-github')
+        _info('  hermes mcp add minimax-media --preset minimax-oauth')
         _info('  hermes mcp add myserver --preset mypreset')
         return
 
@@ -278,7 +338,9 @@ def cmd_mcp_add(args):
         if cmd_args:
             server_config["args"] = cmd_args
         if explicit_env:
-            server_config["env"] = explicit_env
+            merged_env = dict(server_config.get("env") or {})
+            merged_env.update(explicit_env)
+            server_config["env"] = merged_env
 
 
     # ── Authentication ────────────────────────────────────────────────

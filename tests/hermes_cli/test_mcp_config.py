@@ -8,6 +8,7 @@ any actual MCP servers or API keys.
 import argparse
 import json
 import os
+import sys
 import types
 from pathlib import Path
 from typing import Any, Dict, List
@@ -364,6 +365,88 @@ class TestMcpAdd:
         assert srv["command"] == "npx"
         assert srv["args"] == ["-y", "test-mcp-server"]
         assert "env" not in srv
+
+    def test_add_preset_carries_default_env_and_allows_env_overrides(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """Preset env templates are saved and explicit --env overrides merge in."""
+        monkeypatch.setattr(
+            "hermes_cli.mcp_config._MCP_PRESETS",
+            {
+                "testmcp": {
+                    "command": "uvx",
+                    "args": ["test-mcp-server", "-y"],
+                    "env": {
+                        "API_KEY": "${API_KEY}",
+                        "API_HOST": "https://api.example.com",
+                    },
+                }
+            },
+        )
+
+        def mock_probe(name, config, **kw):
+            assert config["env"] == {
+                "API_KEY": "override",
+                "API_HOST": "https://api.example.com",
+                "EXTRA": "1",
+            }
+            return [("do_thing", "Does a thing")]
+
+        monkeypatch.setattr(
+            "hermes_cli.mcp_config._probe_single_server", mock_probe
+        )
+        monkeypatch.setattr("builtins.input", lambda _: "")
+
+        from hermes_cli.mcp_config import cmd_mcp_add
+        from hermes_cli.config import read_raw_config
+
+        cmd_mcp_add(_make_args(
+            name="myserver",
+            preset="testmcp",
+            env=["API_KEY=override", "EXTRA=1"],
+        ))
+        out = capsys.readouterr().out
+        assert "Saved" in out
+
+        srv = read_raw_config()["mcp_servers"]["myserver"]
+        assert srv["env"] == {
+            "API_KEY": "override",
+            "API_HOST": "https://api.example.com",
+            "EXTRA": "1",
+        }
+
+    def test_minimax_oauth_preset_uses_hermes_wrapper(self, tmp_path, capsys, monkeypatch):
+        """The MiniMax OAuth preset uses Hermes' OAuth-to-env stdio wrapper."""
+        def mock_probe(name, config, **kw):
+            assert config["command"] == sys.executable
+            assert config["args"][:3] == [
+                "-m",
+                "hermes_cli.minimax_mcp_oauth_stdio",
+                "minimax-mcp",
+            ]
+            assert config["env"]["MINIMAX_API_RESOURCE_MODE"] == "url"
+            return [("generate_video", "Generate a video")]
+
+        monkeypatch.setattr(
+            "hermes_cli.mcp_config._probe_single_server", mock_probe
+        )
+        monkeypatch.setattr("builtins.input", lambda _: "")
+
+        from hermes_cli.mcp_config import cmd_mcp_add
+        from hermes_cli.config import read_raw_config
+
+        cmd_mcp_add(_make_args(name="minimax-media", preset="minimax-oauth"))
+        out = capsys.readouterr().out
+        assert "Saved" in out
+
+        srv = read_raw_config()["mcp_servers"]["minimax-media"]
+        assert srv["command"] == sys.executable
+        assert srv["args"][:3] == [
+            "-m",
+            "hermes_cli.minimax_mcp_oauth_stdio",
+            "minimax-mcp",
+        ]
+        assert srv["env"]["MINIMAX_API_RESOURCE_MODE"] == "url"
 
     def test_preset_does_not_override_explicit_command(self, tmp_path, capsys, monkeypatch):
         """Explicit transports win over presets."""
